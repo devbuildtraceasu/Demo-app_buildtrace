@@ -1272,9 +1272,9 @@ def main():
     # Alignment options
     parser.add_argument(
         "--align",
-        choices=["grid", "scipy-sift", "basic-sift"],
-        default="grid",
-        help="Alignment method: grid (with SIFT refinement), scipy-sift (optimized), basic-sift (simple)",
+        choices=["scipy-sift", "basic-sift", "grid"],
+        default="scipy-sift",
+        help="Alignment method: scipy-sift (optimized, recommended), basic-sift (simple), grid (with SIFT refinement)",
     )
     parser.add_argument("--sift-scale", type=float, default=1.0, help="SIFT downsample scale")
     parser.add_argument("--ratio-threshold", type=float, default=0.75, help="Lowe's ratio test threshold (lower=stricter, default=0.75)")
