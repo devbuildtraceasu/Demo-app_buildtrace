@@ -1,0 +1,375 @@
+generator client {
+  provider      = "prisma-client"
+  output        = "../generated/prisma"
+  binaryTargets = ["native", "darwin-arm64"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// ---------- Users & Organizations ----------
+
+model User {
+  id        String    @id @default(cuid()) @map("id")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  email           String  @unique @map("email")
+  passwordHash    String? @map("password_hash")
+  firstName       String? @map("first_name")
+  lastName        String? @map("last_name")
+  profileImageUrl String? @map("profile_image_url")
+
+  // OAuth fields
+  googleId String? @unique @map("google_id")
+
+  organizationId String?       @map("organization_id")
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+
+  // Assignments
+  assignedChanges Change[] @relation("ChangeAssignee")
+
+  @@index([email])
+  @@index([organizationId])
+  @@map("users")
+}
+
+model Organization {
+  id        String    @id @default(cuid()) @map("id")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  name String @map("name")
+  slug String @unique @map("slug")
+
+  users    User[]
+  projects Project[]
+
+  @@map("organizations")
+}
+
+model Session {
+  id        String   @id @map("sid")
+  sess      Json     @map("sess")
+  expire    DateTime @map("expire")
+
+  @@index([expire])
+  @@map("sessions")
+}
+
+/// ---------- Projects & Drawings ----------
+
+model Project {
+  id        String    @id @default(cuid()) @map("id")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  organizationId String       @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  name        String  @map("name")
+  description String? @map("description")
+
+  // Additional project metadata
+  projectNumber    String? @map("project_number")
+  address          String? @map("address")
+  projectType      String? @map("project_type")
+  phase            String? @map("phase")
+  owner            String? @map("owner")
+  contractor       String? @map("contractor")
+  architect        String? @map("architect")
+  projectManager   String? @map("project_manager")
+  contractValue    String? @map("contract_value")
+  targetCompletion String? @map("target_completion")
+
+  drawings     Drawing[]
+  jobs         Job[]
+  costAnalyses CostAnalysis[]
+
+  @@index([organizationId])
+  @@map("projects")
+}
+
+model Drawing {
+  id        String    @id @default(cuid()) @map("id")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  projectId String  @map("project_id")
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  filename String  @map("filename")
+  name     String? @map("name")
+  uri      String  @map("uri")
+
+  sheets Sheet[]
+
+  @@index([projectId])
+  @@map("drawings")
+}
+
+model Sheet {
+  id        String    @id @default(cuid()) @map("id")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  drawingId String  @map("drawing_id")
+  drawing   Drawing @relation(fields: [drawingId], references: [id], onDelete: Cascade)
+
+  index Int    @map("index")
+  uri   String @map("uri")
+
+  title       String? @map("title")
+  sheetNumber String? @map("sheet_number")
+  discipline  String? @map("discipline")
+  metadata    Json?   @map("metadata")
+
+  blocks Block[]
+
+  @@unique([drawingId, index])
+  @@map("sheets")
+}
+
+model Block {
+  id        String    @id @default(cuid()) @map("id")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  sheetId String @map("sheet_id")
+  sheet   Sheet  @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+
+  type        BlockType? @map("type")
+  uri         String?    @map("uri")
+  bounds      Json?      @map("bounds")
+  ocr         String?    @map("ocr")
+  description String?    @map("description")
+  metadata    Json?      @map("metadata")
+
+  aOverlays Overlay[] @relation("Block A Overlay")
+  bOverlays Overlay[] @relation("Block B Overlay")
+
+  @@index([sheetId])
+  @@index([type])
+  @@map("blocks")
+}
+
+model Overlay {
+  id        String    @id @default(cuid()) @map("id")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  blockAId String @map("block_a_id")
+  blockA   Block  @relation("Block A Overlay", fields: [blockAId], references: [id], onDelete: Cascade)
+  blockBId String @map("block_b_id")
+  blockB   Block  @relation("Block B Overlay", fields: [blockBId], references: [id], onDelete: Cascade)
+  jobId    String? @map("job_id")
+  job      Job?    @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  uri         String? @map("uri")
+  additionUri String? @map("addition_uri")
+  deletionUri String? @map("deletion_uri")
+  score       Float?  @map("score")
+  summary     Json?   @map("summary")
+  changesJson Json[]  @map("changes")
+  clashes     Json[]  @map("clashes")
+
+  // Alignment metadata
+  alignmentMethod String? @map("alignment_method")
+  alignmentStats  Json?   @map("alignment_stats")
+
+  changes      Change[]
+  costAnalysis CostAnalysis?
+
+  @@index([blockAId])
+  @@index([blockBId])
+  @@index([jobId])
+  @@map("overlays")
+}
+
+/// ---------- Changes & Cost Analysis ----------
+
+model Change {
+  id        String    @id @default(cuid()) @map("id")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  overlayId String  @map("overlay_id")
+  overlay   Overlay @relation(fields: [overlayId], references: [id], onDelete: Cascade)
+
+  type        ChangeType @map("type")
+  title       String     @map("title")
+  description String?    @map("description")
+
+  // Location
+  bounds      Json?   @map("bounds")
+  coordinates String? @map("coordinates")
+  sheetNumber String? @map("sheet_number")
+
+  // Classification
+  trade      String? @map("trade")
+  discipline String? @map("discipline")
+
+  // Impact estimates
+  estimatedCost  String? @map("estimated_cost")
+  scheduleImpact String? @map("schedule_impact")
+
+  // Workflow
+  status     ChangeStatus @default(OPEN) @map("status")
+  assigneeId String?      @map("assignee_id")
+  assignee   User?        @relation("ChangeAssignee", fields: [assigneeId], references: [id])
+
+  // AI analysis
+  aiConfidence Float? @map("ai_confidence")
+  aiMetadata   Json?  @map("ai_metadata")
+
+  comments Comment[]
+
+  @@index([overlayId])
+  @@index([status])
+  @@index([assigneeId])
+  @@map("changes")
+}
+
+model Comment {
+  id        String   @id @default(cuid()) @map("id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  changeId String @map("change_id")
+  change   Change @relation(fields: [changeId], references: [id], onDelete: Cascade)
+
+  authorName  String @map("author_name")
+  authorEmail String @map("author_email")
+  content     String @map("content")
+
+  @@index([changeId])
+  @@map("comments")
+}
+
+model CostAnalysis {
+  id        String   @id @default(cuid()) @map("id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  overlayId String  @unique @map("overlay_id")
+  overlay   Overlay @relation(fields: [overlayId], references: [id], onDelete: Cascade)
+
+  projectId String  @map("project_id")
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // Summary
+  totalCostImpact     String? @map("total_cost_impact")
+  totalScheduleImpact String? @map("total_schedule_impact")
+  biggestCostDriver   String? @map("biggest_cost_driver")
+
+  // Breakdown by trade
+  tradeBreakdown Json? @map("trade_breakdown")
+
+  // AI analysis metadata
+  analysisData Json?               @map("analysis_data")
+  status       CostAnalysisStatus @default(PENDING) @map("status")
+
+  @@index([projectId])
+  @@map("cost_analyses")
+}
+
+/// ---------- Job ----------
+
+model Job {
+  id        String   @id @default(cuid()) @map("id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  projectId String?  @map("project_id")
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  parentId  String?  @map("parent_id")
+  parent    Job?     @relation("JobHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+
+  children Job[] @relation("JobHierarchy")
+
+  targetType String @map("target_type")
+  targetId   String @map("target_id")
+
+  type    String    @map("type")
+  status  JobStatus @map("status")
+  payload Json      @map("payload")
+  events  Json?     @map("events")
+
+  overlays Overlay[]
+
+  @@index([projectId, createdAt])
+  @@index([type])
+  @@index([status])
+  @@index([targetType, targetId])
+  @@index([parentId])
+  @@map("jobs")
+}
+
+/// ---------- Enums ----------
+
+enum BlockType {
+  PLAN             @map("Plan")
+  ELEVATION        @map("Elevation")
+  SECTION          @map("Section")
+  DETAIL           @map("Detail")
+  KEYNOTE          @map("Keynote")
+  LEGEND           @map("Legend")
+  DIAGRAM          @map("Diagram")
+  KEY_PLAN         @map("KeyPlan")
+  NORTH_ARROW      @map("North Arrow")
+  GENERAL_NOTE     @map("General Note")
+  SCHEDULE         @map("Schedule")
+  REVISION_HISTORY @map("Revision History")
+  PROJECT_INFO     @map("Project Info")
+  GENERAL_NOTES    @map("General Notes")
+  KEY_NOTES        @map("Key Notes")
+  SHEET_NOTES      @map("Sheet Notes")
+  ABBREVIATIONS    @map("Abbreviations")
+  CODE_REFERENCES  @map("Code References")
+  NOTES            @map("Notes")
+  TITLE_BLOCK      @map("Title Block")
+  CONSULTANTS      @map("Consultants")
+  SEALS            @map("Seals")
+  CHANGE           @map("Change")
+  CLASH            @map("Clash")
+}
+
+enum JobStatus {
+  QUEUED    @map("Queued")
+  STARTED   @map("Started")
+  COMPLETED @map("Completed")
+  FAILED    @map("Failed")
+  CANCELED  @map("Canceled")
+}
+
+enum ChangeType {
+  ADDED    @map("added")
+  REMOVED  @map("removed")
+  MODIFIED @map("modified")
+}
+
+enum ChangeStatus {
+  OPEN       @map("open")
+  IN_REVIEW  @map("in_review")
+  PRICING    @map("pricing")
+  APPROVED   @map("approved")
+  REJECTED   @map("rejected")
+  CLOSED     @map("closed")
+}
+
+enum CostAnalysisStatus {
+  PENDING    @map("pending")
+  PROCESSING @map("processing")
+  COMPLETED  @map("completed")
+  FAILED     @map("failed")
+}

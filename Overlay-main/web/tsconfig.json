@@ -1,0 +1,19 @@
+{
+	"include": ["generated", "prisma.config.ts"],
+	"compilerOptions": {
+		"target": "ES2022",
+		"lib": ["ES2022"],
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"strict": true,
+		"resolveJsonModule": true,
+		"noEmit": true,
+		"isolatedModules": true,
+		"allowImportingTsExtensions": true,
+		"skipLibCheck": true,
+		"baseUrl": ".",
+		"paths": {
+			"#prisma/*": ["./generated/prisma/*"]
+		}
+	}
+}

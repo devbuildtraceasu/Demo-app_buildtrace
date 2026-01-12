@@ -1,0 +1,98 @@
+# BuildTrace Cloud Build Configuration
+# Builds and deploys all services to Cloud Run
+
+substitutions:
+  _REGION: us-central1
+  _PROJECT_ID: ${PROJECT_ID}
+
+steps:
+  # Build API Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/buildtrace/api:${SHORT_SHA}'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/buildtrace/api:latest'
+      - '-f'
+      - 'api/Dockerfile'
+      - '.'
+    dir: '.'
+
+  # Build Overlay Worker Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/buildtrace/overlay-worker:${SHORT_SHA}'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/buildtrace/overlay-worker:latest'
+      - '-f'
+      - 'vision/worker/Dockerfile'
+      - '.'
+    dir: '.'
+
+  # Push API image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/buildtrace/api:${SHORT_SHA}'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/buildtrace/api:latest'
+
+  # Push Overlay Worker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/buildtrace/overlay-worker:${SHORT_SHA}'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/buildtrace/overlay-worker:latest'
+
+  # Deploy API to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'buildtrace-api'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/buildtrace/api:${SHORT_SHA}'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+
+  # Deploy Overlay Worker to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'buildtrace-overlay-worker'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/buildtrace/overlay-worker:${SHORT_SHA}'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--no-allow-unauthenticated'
+
+images:
+  - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/buildtrace/api:${SHORT_SHA}'
+  - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/buildtrace/api:latest'
+  - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/buildtrace/overlay-worker:${SHORT_SHA}'
+  - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/buildtrace/overlay-worker:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'
+
+timeout: '1800s' # 30 minutes
+

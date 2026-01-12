@@ -1,0 +1,70 @@
+[project]
+name = "odin-vision-worker"
+version = "0.1.0"
+description = "Vision worker for Bedrock PDF conversion pipeline"
+requires-python = ">=3.12"
+dependencies = [
+    # PDF Processing
+    "pymupdf>=1.24.13",
+    # Image Processing
+    "pillow>=10.4.0",
+    "opencv-contrib-python>=4.10.0", # Required for SIFT (opencv-python does not include it)
+    # Object Storage
+    "google-cloud-storage>=2.10.0", # Production (GCS)
+    "boto3>=1.34.0", # S3-compatible storage (AWS S3, MinIO)
+    # Message Queue
+    "google-cloud-pubsub>=2.23.0",
+    # Database
+    "sqlmodel>=0.0.22",
+    "psycopg2-binary>=2.9.10",
+    # Configuration
+    "pydantic-settings>=2.0.0",
+    "python-dotenv>=1.0.0",
+    # AI/LLM APIs
+    "openai>=1.0.0", # GPT-5-mini for OCR and identifier extraction
+    "google-genai>=0.2.0", # Google Gemini API
+    "pypdfium2>=5.1.0",
+    "pdf2image>=1.17.0",
+    "scipy>=1.11.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.3",
+    "pytest-asyncio>=0.21.0",
+    "pytest-xdist>=3.5.0",  # Parallel test execution
+    "ruff>=0.8.0",
+    "pre-commit>=4.0.0",
+]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore:builtin type.*has no __module__ attribute:DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = ["scripts/"]  # Experimental scripts, not production code
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes (undefined names, unused imports)
+    "I",      # isort
+    "UP",     # pyupgrade
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "E741",   # ambiguous variable name (l for line is fine)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F841"]  # Allow unused variables in tests (for setup)
+
+[tool.ruff.lint.isort]
+known-first-party = ["clients", "config", "jobs", "lib", "models", "utils"]
+
+[tool.uv]
+package = false

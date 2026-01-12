@@ -1,0 +1,20 @@
+# BuildTrace Terraform Variables
+# Copy this file to terraform.tfvars and fill in values
+
+# Required
+project_id = "your-gcp-project-id"
+
+# Optional - defaults provided
+region           = "us-central1"
+environment      = "development"
+db_tier          = "db-g1-small"
+db_disk_size     = 20
+api_image_tag    = "latest"
+worker_image_tag = "latest"
+
+cors_origins = [
+  "http://localhost:3000",
+  "http://localhost:5000",
+  "https://your-production-domain.com"
+]
+

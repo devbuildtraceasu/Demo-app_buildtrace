@@ -1,0 +1,153 @@
+# BuildTrace Production Docker Compose
+# For local production-like testing
+
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: buildtrace
+      POSTGRES_USER: buildtrace
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-buildtrace_prod_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U buildtrace"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MinIO (S3-compatible storage)
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-buildtrace}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-buildtrace123}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Create MinIO buckets
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: |
+      /bin/sh -c "
+        mc alias set local http://minio:9000 buildtrace buildtrace123;
+        mc mb --ignore-existing local/buildtrace-uploads;
+        mc mb --ignore-existing local/buildtrace-overlays;
+        mc anonymous set download local/buildtrace-overlays;
+        exit 0;
+      "
+
+  # Pub/Sub Emulator
+  pubsub:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:latest
+    restart: unless-stopped
+    command: gcloud beta emulators pubsub start --host-port=0.0.0.0:8085
+    ports:
+      - "8085:8085"
+
+  # BuildTrace API
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://buildtrace:${DB_PASSWORD:-buildtrace_prod_password}@postgres:5432/buildtrace
+      STORAGE_BACKEND: s3
+      STORAGE_BUCKET: buildtrace-uploads
+      STORAGE_ENDPOINT: http://minio:9000
+      STORAGE_ACCESS_KEY: ${MINIO_ACCESS_KEY:-buildtrace}
+      STORAGE_SECRET_KEY: ${MINIO_SECRET_KEY:-buildtrace123}
+      PUBSUB_EMULATOR_HOST: pubsub:8085
+      PUBSUB_PROJECT_ID: buildtrace-local
+      VISION_TOPIC: vision
+      JWT_SECRET: ${JWT_SECRET:-change-this-in-production}
+      DEBUG: "false"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      pubsub:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Overlay Worker
+  overlay-worker:
+    build:
+      context: .
+      dockerfile: vision/worker/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://buildtrace:${DB_PASSWORD:-buildtrace_prod_password}@postgres:5432/buildtrace
+      STORAGE_BACKEND: s3
+      STORAGE_BUCKET: buildtrace-overlays
+      STORAGE_ENDPOINT: http://minio:9000
+      STORAGE_ACCESS_KEY: ${MINIO_ACCESS_KEY:-buildtrace}
+      STORAGE_SECRET_KEY: ${MINIO_SECRET_KEY:-buildtrace123}
+      PUBSUB_EMULATOR_HOST: pubsub:8085
+      PUBSUB_PROJECT_ID: buildtrace-local
+      VISION_SUBSCRIPTION: vision-subscription
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # Alignment settings
+      SIFT_N_FEATURES: "20000"
+      SIFT_RATIO_THRESHOLD: "0.75"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      pubsub:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+        reservations:
+          memory: 8G
+
+  # Frontend (Nginx serving static files)
+  frontend:
+    build:
+      context: ../Build-TraceFlow
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    environment:
+      VITE_API_URL: http://localhost:8000/api
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  minio_data:
+
+networks:
+  default:
+    name: buildtrace-network
+
