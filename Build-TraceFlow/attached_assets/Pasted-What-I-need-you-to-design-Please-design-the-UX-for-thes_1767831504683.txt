@@ -1,0 +1,68 @@
+What I need you to design
+Please design the UX for these key surfaces:
+
+1. Marketing landing page
+A minimal, high-clarity page explaining the product in one glance.
+• Strong headline
+• Simple 3-step “How it works”
+• CTA to try a project
+• Trust strip with customer logos or quotes
+• Footer with basic links
+
+2. Onboarding / First project setup
+A guided, low-friction flow that collects only essential info:
+Step 1: Project basics (name, type, budget range, location)
+Step 2: Upload drawings (previous set and revised set)
+Step 3: Select disciplines and optional filters (sheet range, search by sheet ID)
+Step 4: Summary screen + “Run comparison”
+Show a slim progress indicator and clear microcopy.
+
+3. Authenticated workspace layout
+A simple, powerful structure:
+• Left navigation: Projects, Overlays, Change Reports, Cost & Schedule, Settings
+• Top bar: active project selector, notifications, user menu
+• Clean content area for each view
+
+4. Project dashboard
+A high-level project overview:
+• Project metadata
+• Timeline of drawing revisions with badges showing impacted sheets
+• Recent comparison runs and their status
+• CTA to start a new comparison
+
+5. Overlay / Comparison viewer (core experience)
+This is the main “aha moment.”
+• Split layout
+– Left: drawing viewer with overlay or side-by-side mode
+– Right: structured change list with grouping and filters
+• Features:
+– Toggle layers (new, removed, modified)
+– Pan/zoom
+– Jump to change location from the list
+– Filters by discipline, sheet, severity, status
+
+6. Cost & Schedule insights view
+Clear, decision-ready summaries:
+• Total cost delta
+• Cost impact by trade
+• Schedule impact by phase
+• Charts or simplified visuals
+• Export to PDF or CSV
+
+7. Collaboration tools
+Lightweight review workflow:
+• Comment on individual changes
+• Assign changes to specific team members
+• Status options: Open, In Review, Pricing Needed, Closed
+
+Deliverables to output
+
+A sitemap / IA covering all screens
+
+A user flow from first visit → first completed overlay
+
+Wireframe-level descriptions for each key surface
+
+Suggested microcopy for CTAs and critical moments
+
+Do not write code. Focus entirely on UX structure, flows, hierarchy, and clarity.

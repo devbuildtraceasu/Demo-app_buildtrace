@@ -1,0 +1,125 @@
+Please keep the existing BuildTrace UX design exactly as-is unless explicitly changed below.
+Apply these focused fixes and additions:
+
+1. Make the user profile clickable with full account controls
+
+In the top bar, the user avatar / name must open a Profile & Account menu and page.
+
+Profile menu (dropdown from avatar) should include:
+– View profile
+– Account & billing
+– Organization / team
+– Sign out
+
+Profile page contents:
+– Editable fields: name, job title, company, phone
+– User permissions / role: e.g. Admin, Member, Viewer (only Admin can change roles)
+– “Invite teammates” section with:
+• Invite by email input
+• Role selector for invitee
+– “Chat history” section:
+• List of past AI chats or sessions associated with this user
+• Simple table: date, project, last message snippet, “Open” button
+
+The design should show where these live in the layout and what the key interactions are (edit, save, invite, change role, open chat).
+
+2. Upgrade the comparison panel with Overlay + Side-by-side and full change editing
+
+In the comparison / overlay view, keep the current structure but add:
+
+a) View mode toggles
+At the top of the drawing viewer, add clear toggle buttons:
+– “Overlay”
+– “Side-by-side”
+
+b) Overlay visual rules
+In Overlay mode, the drawing visualization should follow this legend:
+– Red: elements that exist in the old drawing but not in the new one (removed / changed parts)
+– Green: elements that exist in the new drawing but not in the old one (new / changed parts)
+– Grey: areas with no changes (context / unchanged geometry)
+Include a small legend in the UI explaining these three colors.
+
+c) Change list interaction
+The right-hand change list should behave like this:
+– Clicking on a change row zooms and highlights the corresponding region on the drawing.
+– Each change row shows: description, sheet ID, discipline, cost impact tag, schedule tag, and status.
+– Allowed status values:
+• Open
+• In review
+• Pricing
+• Closed
+– The user can edit: description, tags, and status, then click Save.
+
+d) Create new changes directly on the drawing
+In the drawing viewer, add a tool (e.g. “Add change”) that allows:
+– The user to draw/snap a new bounding box region on the overlay.
+– After drawing the box, a new change entry pops up:
+• Auto-fills sheet ID and coordinates
+• User can add description, cost/schedule notes, status
+– Saving this creates a new row in the change list and keeps it linked to that region.
+
+e) Side-by-side mode
+– Left panel: old drawing
+– Right panel: new drawing
+– Synchronized pan/zoom
+– Clicking a change in the list still highlights the correct region in both views.
+
+3. Add an Organization “god mode” for internal BuildTrace team
+
+Add an Organization or Admin view (accessible only to Admin / internal BuildTrace roles) that provides a “god mode” overview.
+
+This view should include:
+
+a) User management table
+– Columns: User name, email, organization, role, last login, number of projects, status (active / suspended)
+– Ability to:
+• Change user role
+• Deactivate / suspend a user
+
+b) Activity / uploads overview
+– Table or cards showing:
+• Project name
+• Owner (user)
+• Number of drawing sets uploaded
+• Last comparison run date
+– Clicking into a project opens that project dashboard.
+
+c) Drawing & data management
+– For each project, an “Assets” tab where an admin can:
+• See all uploaded drawing sets
+• Delete individual drawing sets or entire projects
+– Include confirmation states for destructive actions (delete drawings / project).
+
+This is meant as an internal control center, not visible to normal end users.
+
+4. Clarify the overlay result legend (repeat and emphasize)
+
+Everywhere the overlay visualization appears, ensure the legend is consistent and clearly visible:
+– Red: old, removed or changed parts
+– Green: new or modified parts in the latest drawing
+– Grey: unchanged background context
+
+The legend should be present on the main comparison screen and on any exported-view mockups you include.
+
+5. Add a Credits panel under Account → Settings
+
+Under Settings (for the logged-in user/account), add a main panel called Credits.
+
+Business logic:
+– In BuildTrace, 10 credits = $1.
+– Credits are consumed when overlays and analyses are generated.
+
+Credits panel layout should include:
+– Current credit balance (large, clear number)
+– Equivalent dollar value shown underneath (e.g. “2,000 credits ≈ $200”)
+– Recent usage table with columns: Date, Project, Action (e.g. “Overlay + Analysis”), Credits used.
+– A “Purchase credits” or “Top up” section:
+• Predefined packs (e.g. 5,000 / 10,000 / 25,000 credits)
+• Indicate approximate dollar cost for each pack based on 10 credits = $1.
+• Primary CTA: “Buy credits” (you do not need to design the payment gateway itself, just the UX around selecting and confirming packs).
+
+The rest of the Settings layout should remain the same; just add Credits as a prominent tab / section within Account.
+
+Important:
+– Do not redesign the rest of the app. Only implement the changes and new screens/sections described above.
+– Keep visual style, navigation, and overall structure identical to your current BuildTrace design unless a change is explicitly requested here.
