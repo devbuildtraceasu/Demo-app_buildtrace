@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,32 +22,172 @@ import {
   Users,
   Calendar,
   DollarSign,
-  Check
+  Check,
+  X,
+  AlertCircle
 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { useToast } from "@/hooks/use-toast";
+import api from "@/lib/api";
 import logo from "@assets/BuildTrace_Logo_1767832159404.jpg";
+
+interface UploadedFile {
+  file: File;
+  name: string;
+  status: 'pending' | 'uploading' | 'processing' | 'complete' | 'error';
+  progress: number;
+  drawingId?: string;
+  error?: string;
+  sheetCount?: number;
+  blockCount?: number;
+}
 
 export default function ProjectSetup() {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [, setLocation] = useLocation();
+  const { toast } = useToast();
+  
+  // Project details (Step 1)
+  const [projectName, setProjectName] = useState("");
+  const [projectNumber, setProjectNumber] = useState("");
+  const [projectAddress, setProjectAddress] = useState("");
+  const [projectType, setProjectType] = useState("");
+  const [projectPhase, setProjectPhase] = useState("");
+  const [projectDescription, setProjectDescription] = useState("");
+  
+  // Team details (Step 2)
+  const [ownerClient, setOwnerClient] = useState("");
+  const [generalContractor, setGeneralContractor] = useState("");
+  const [architect, setArchitect] = useState("");
+  const [projectManager, setProjectManager] = useState("");
+  const [contractValue, setContractValue] = useState("");
+  const [targetCompletion, setTargetCompletion] = useState("");
+  
+  // Project ID (created after Step 1)
+  const [projectId, setProjectId] = useState<string | null>(null);
+  
+  // File upload (Step 3)
   const [importMethod, setImportMethod] = useState<"upload" | "procore" | "acc" | null>(null);
-  const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [connecting, setConnecting] = useState(false);
   const [connected, setConnected] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const totalSteps = 4;
   const progress = (step / totalSteps) * 100;
 
-  const handleNext = () => {
+  // Poll for processing status of uploaded drawings
+  useEffect(() => {
+    const pollDrawingStatus = async () => {
+      const processingFiles = uploadedFiles.filter(f => f.status === 'processing' && f.drawingId);
+      
+      for (const file of processingFiles) {
+        if (!file.drawingId) continue;
+        
+        try {
+          const status = await api.drawings.getStatus(file.drawingId);
+          
+          setUploadedFiles(prev => prev.map(f => {
+            if (f.drawingId !== file.drawingId) return f;
+            
+            if (status.status === 'completed') {
+              return {
+                ...f,
+                status: 'complete',
+                progress: 100,
+                sheetCount: status.sheet_count,
+                blockCount: status.block_count,
+              };
+            } else if (status.status === 'failed') {
+              return {
+                ...f,
+                status: 'error',
+                error: 'Processing failed',
+              };
+            } else {
+              // Still processing - update progress based on status
+              const newProgress = status.status === 'processing' 
+                ? Math.min(90, (status.progress || 50))
+                : f.progress;
+              return {
+                ...f,
+                progress: newProgress,
+                sheetCount: status.sheet_count,
+                blockCount: status.block_count,
+              };
+            }
+          }));
+        } catch (error) {
+          console.error('Error polling drawing status:', error);
+        }
+      }
+    };
+
+    const interval = setInterval(pollDrawingStatus, 3000);
+    return () => clearInterval(interval);
+  }, [uploadedFiles]);
+
+  // Create project when moving from Step 1 to Step 2
+  const handleCreateProject = async () => {
+    if (!projectName.trim()) {
+      toast({
+        title: "Project name required",
+        description: "Please enter a project name to continue.",
+        variant: "destructive",
+      });
+      return false;
+    }
+
+    try {
+      const project = await api.projects.create({
+        name: projectName,
+        description: projectDescription || undefined,
+      });
+      
+      setProjectId(project.id);
+      
+      // Update project with additional details
+      await api.projects.update(project.id, {
+        project_number: projectNumber || undefined,
+        address: projectAddress || undefined,
+        project_type: projectType || undefined,
+        phase: projectPhase || undefined,
+      });
+      
+      toast({
+        title: "Project created",
+        description: "Your project has been created. Continue to add team details and drawings.",
+      });
+      
+      return true;
+    } catch (error) {
+      console.error('Error creating project:', error);
+      toast({
+        title: "Error creating project",
+        description: error instanceof Error ? error.message : "Failed to create project",
+        variant: "destructive",
+      });
+      return false;
+    }
+  };
+
+  const handleNext = async () => {
+    if (step === 1) {
+      // Create project before moving to Step 2
+      const success = await handleCreateProject();
+      if (!success) return;
+    }
+    
     if (step < totalSteps) {
       setStep(step + 1);
     } else {
       setLoading(true);
+      // Final step - redirect to project dashboard
       setTimeout(() => {
-        setLocation("/dashboard");
+        setLocation(projectId ? `/project/${projectId}` : "/dashboard");
       }, 1500);
     }
   };
@@ -56,12 +196,127 @@ export default function ProjectSetup() {
     if (step > 1) setStep(step - 1);
   };
 
-  const handleFileUpload = () => {
-    setUploadedFiles([
-      "IFC Set - Jan 2024.pdf",
-      "Architectural Drawings.pdf",
-      "MEP Coordination Set.pdf"
-    ]);
+  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+    
+    // Add files to list with pending status
+    const newFiles: UploadedFile[] = Array.from(files).map(file => ({
+      file,
+      name: file.name,
+      status: 'pending',
+      progress: 0,
+    }));
+    
+    setUploadedFiles(prev => [...prev, ...newFiles]);
+    
+    // Upload each file
+    for (const uploadFile of newFiles) {
+      await uploadSingleFile(uploadFile.file);
+    }
+    
+    // Clear input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const uploadSingleFile = async (file: File) => {
+    if (!projectId) {
+      toast({
+        title: "Project not created",
+        description: "Please complete Step 1 first to create a project.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Update status to uploading
+    setUploadedFiles(prev => prev.map(f => 
+      f.file === file ? { ...f, status: 'uploading', progress: 10 } : f
+    ));
+
+    try {
+      // Upload file directly
+      const uploadResult = await api.uploads.uploadDirect(file, projectId);
+      
+      setUploadedFiles(prev => prev.map(f => 
+        f.file === file ? { ...f, progress: 50 } : f
+      ));
+
+      // Create drawing record (this triggers Gemini processing)
+      const drawing = await api.drawings.create({
+        project_id: projectId,
+        filename: file.name,
+        name: file.name.replace(/\.[^/.]+$/, ''),
+        uri: uploadResult.uri,
+      });
+      
+      // Update to processing status
+      setUploadedFiles(prev => prev.map(f => 
+        f.file === file ? { 
+          ...f, 
+          status: 'processing', 
+          progress: 60, 
+          drawingId: drawing.id 
+        } : f
+      ));
+
+      toast({
+        title: "Upload complete",
+        description: `${file.name} is now being processed by AI...`,
+      });
+
+    } catch (error) {
+      console.error('Upload error:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Upload failed';
+      
+      setUploadedFiles(prev => prev.map(f => 
+        f.file === file ? { ...f, status: 'error', error: errorMessage } : f
+      ));
+      
+      toast({
+        title: "Upload failed",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleDropZoneClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const files = e.dataTransfer.files;
+    if (!files || files.length === 0) return;
+    
+    // Add files to list with pending status
+    const newFiles: UploadedFile[] = Array.from(files).map(file => ({
+      file,
+      name: file.name,
+      status: 'pending',
+      progress: 0,
+    }));
+    
+    setUploadedFiles(prev => [...prev, ...newFiles]);
+    
+    // Upload each file
+    for (const uploadFile of newFiles) {
+      await uploadSingleFile(uploadFile.file);
+    }
+  };
+
+  const removeFile = (fileName: string) => {
+    setUploadedFiles(prev => prev.filter(f => f.name !== fileName));
   };
 
   const handleConnect = (platform: "procore" | "acc") => {
@@ -71,6 +326,35 @@ export default function ProjectSetup() {
       setConnected(true);
       setImportMethod(platform);
     }, 2000);
+  };
+
+  const getStatusIcon = (file: UploadedFile) => {
+    switch (file.status) {
+      case 'complete':
+        return <CheckCircle2 className="w-5 h-5 text-green-500" />;
+      case 'error':
+        return <AlertCircle className="w-5 h-5 text-red-500" />;
+      case 'uploading':
+      case 'processing':
+        return <Loader2 className="w-5 h-5 animate-spin text-primary" />;
+      default:
+        return <FileText className="w-5 h-5 text-primary" />;
+    }
+  };
+
+  const getStatusText = (file: UploadedFile) => {
+    switch (file.status) {
+      case 'uploading':
+        return `Uploading... ${file.progress}%`;
+      case 'processing':
+        return `AI Processing... ${file.progress}%`;
+      case 'complete':
+        return `${file.sheetCount || 0} sheets, ${file.blockCount || 0} blocks`;
+      case 'error':
+        return file.error || 'Error';
+      default:
+        return 'Pending';
+    }
   };
 
   return (
@@ -114,11 +398,21 @@ export default function ProjectSetup() {
                     <div className="grid md:grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label htmlFor="name">Project Name *</Label>
-                        <Input id="name" placeholder="e.g., Memorial Hospital Expansion" />
+                        <Input 
+                          id="name" 
+                          placeholder="e.g., Memorial Hospital Expansion" 
+                          value={projectName}
+                          onChange={(e) => setProjectName(e.target.value)}
+                        />
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="number">Project Number</Label>
-                        <Input id="number" placeholder="e.g., PRJ-2024-001" />
+                        <Input 
+                          id="number" 
+                          placeholder="e.g., PRJ-2024-001" 
+                          value={projectNumber}
+                          onChange={(e) => setProjectNumber(e.target.value)}
+                        />
                       </div>
                     </div>
                     
@@ -126,14 +420,20 @@ export default function ProjectSetup() {
                       <Label htmlFor="address">Project Address</Label>
                       <div className="relative">
                         <MapPin className="absolute left-3 top-3 w-4 h-4 text-muted-foreground" />
-                        <Input id="address" placeholder="123 Main Street, City, State" className="pl-9" />
+                        <Input 
+                          id="address" 
+                          placeholder="123 Main Street, City, State" 
+                          className="pl-9" 
+                          value={projectAddress}
+                          onChange={(e) => setProjectAddress(e.target.value)}
+                        />
                       </div>
                     </div>
 
                     <div className="grid md:grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label>Project Type</Label>
-                        <Select>
+                        <Select value={projectType} onValueChange={setProjectType}>
                           <SelectTrigger>
                             <SelectValue placeholder="Select type" />
                           </SelectTrigger>
@@ -149,7 +449,7 @@ export default function ProjectSetup() {
                       </div>
                       <div className="space-y-2">
                         <Label>Project Phase</Label>
-                        <Select>
+                        <Select value={projectPhase} onValueChange={setProjectPhase}>
                           <SelectTrigger>
                             <SelectValue placeholder="Select phase" />
                           </SelectTrigger>
@@ -164,7 +464,13 @@ export default function ProjectSetup() {
 
                     <div className="space-y-2">
                       <Label htmlFor="description">Project Description</Label>
-                      <Textarea id="description" placeholder="Brief description of the project scope..." rows={3} />
+                      <Textarea 
+                        id="description" 
+                        placeholder="Brief description of the project scope..." 
+                        rows={3}
+                        value={projectDescription}
+                        onChange={(e) => setProjectDescription(e.target.value)}
+                      />
                     </div>
                   </CardContent>
                 </Card>
@@ -191,22 +497,38 @@ export default function ProjectSetup() {
                     <div className="grid md:grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label>Owner / Client</Label>
-                        <Input placeholder="e.g., City Hospital Authority" />
+                        <Input 
+                          placeholder="e.g., City Hospital Authority" 
+                          value={ownerClient}
+                          onChange={(e) => setOwnerClient(e.target.value)}
+                        />
                       </div>
                       <div className="space-y-2">
                         <Label>General Contractor</Label>
-                        <Input placeholder="e.g., BuildCorps Construction" />
+                        <Input 
+                          placeholder="e.g., BuildCorps Construction" 
+                          value={generalContractor}
+                          onChange={(e) => setGeneralContractor(e.target.value)}
+                        />
                       </div>
                     </div>
 
                     <div className="grid md:grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label>Architect of Record</Label>
-                        <Input placeholder="e.g., Smith & Associates" />
+                        <Input 
+                          placeholder="e.g., Smith & Associates" 
+                          value={architect}
+                          onChange={(e) => setArchitect(e.target.value)}
+                        />
                       </div>
                       <div className="space-y-2">
                         <Label>Project Manager</Label>
-                        <Input placeholder="e.g., Alex Morgan" />
+                        <Input 
+                          placeholder="e.g., Alex Morgan" 
+                          value={projectManager}
+                          onChange={(e) => setProjectManager(e.target.value)}
+                        />
                       </div>
                     </div>
 
@@ -219,7 +541,11 @@ export default function ProjectSetup() {
                             <DollarSign className="w-4 h-4" /> Contract Value
                           </div>
                         </Label>
-                        <Input placeholder="e.g., $45,000,000" />
+                        <Input 
+                          placeholder="e.g., $45,000,000" 
+                          value={contractValue}
+                          onChange={(e) => setContractValue(e.target.value)}
+                        />
                       </div>
                       <div className="space-y-2">
                         <Label>
@@ -227,7 +553,11 @@ export default function ProjectSetup() {
                             <Calendar className="w-4 h-4" /> Target Completion
                           </div>
                         </Label>
-                        <Input type="date" />
+                        <Input 
+                          type="date" 
+                          value={targetCompletion}
+                          onChange={(e) => setTargetCompletion(e.target.value)}
+                        />
                       </div>
                     </div>
                   </CardContent>
@@ -310,8 +640,20 @@ export default function ProjectSetup() {
 
                     {importMethod === "upload" && !connecting && (
                       <div className="space-y-4">
+                        {/* Hidden file input */}
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept=".pdf,.dwg,.dxf"
+                          multiple
+                          onChange={handleFileSelect}
+                          className="hidden"
+                        />
+                        
                         <div 
-                          onClick={handleFileUpload}
+                          onClick={handleDropZoneClick}
+                          onDragOver={handleDragOver}
+                          onDrop={handleDrop}
                           className="border-2 border-dashed border-border rounded-xl p-8 text-center hover:border-primary/50 hover:bg-muted/20 transition-all cursor-pointer"
                         >
                           <Upload className="w-10 h-10 mx-auto mb-4 text-muted-foreground" />
@@ -324,9 +666,25 @@ export default function ProjectSetup() {
                             <p className="text-sm font-medium text-muted-foreground">Uploaded Files</p>
                             {uploadedFiles.map((file, i) => (
                               <div key={i} className="flex items-center gap-3 p-3 bg-muted/30 rounded-lg border border-border">
-                                <FileText className="w-5 h-5 text-primary" />
-                                <span className="flex-1 text-sm font-medium">{file}</span>
-                                <CheckCircle2 className="w-5 h-5 text-green-500" />
+                                {getStatusIcon(file)}
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm font-medium truncate">{file.name}</p>
+                                  <p className="text-xs text-muted-foreground">{getStatusText(file)}</p>
+                                  {(file.status === 'uploading' || file.status === 'processing') && (
+                                    <Progress value={file.progress} className="h-1 mt-1" />
+                                  )}
+                                </div>
+                                {file.status === 'complete' && (
+                                  <CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" />
+                                )}
+                                {file.status === 'error' && (
+                                  <button 
+                                    onClick={() => removeFile(file.name)}
+                                    className="p-1 hover:bg-muted rounded shrink-0"
+                                  >
+                                    <X className="w-4 h-4 text-muted-foreground" />
+                                  </button>
+                                )}
                               </div>
                             ))}
                           </div>
@@ -397,9 +755,11 @@ export default function ProjectSetup() {
                       <div className="flex justify-between items-start">
                         <div>
                           <p className="text-xs text-muted-foreground uppercase tracking-wider">Project Name</p>
-                          <p className="font-semibold text-lg">Memorial Hospital Expansion</p>
+                          <p className="font-semibold text-lg">{projectName || "Untitled Project"}</p>
                         </div>
-                        <Badge>Healthcare</Badge>
+                        {projectType && (
+                          <Badge className="capitalize">{projectType}</Badge>
+                        )}
                       </div>
                       
                       <Separator />
@@ -407,19 +767,19 @@ export default function ProjectSetup() {
                       <div className="grid grid-cols-2 gap-4 text-sm">
                         <div>
                           <p className="text-muted-foreground">Project Number</p>
-                          <p className="font-medium">PRJ-2024-001</p>
+                          <p className="font-medium">{projectNumber || "—"}</p>
                         </div>
                         <div>
                           <p className="text-muted-foreground">Phase</p>
-                          <p className="font-medium">Construction</p>
+                          <p className="font-medium capitalize">{projectPhase || "—"}</p>
                         </div>
                         <div>
                           <p className="text-muted-foreground">Contract Value</p>
-                          <p className="font-medium">$45,000,000</p>
+                          <p className="font-medium">{contractValue || "—"}</p>
                         </div>
                         <div>
                           <p className="text-muted-foreground">Target Completion</p>
-                          <p className="font-medium">Dec 2025</p>
+                          <p className="font-medium">{targetCompletion || "—"}</p>
                         </div>
                       </div>
 
@@ -428,9 +788,29 @@ export default function ProjectSetup() {
                       <div>
                         <p className="text-muted-foreground text-sm mb-2">Imported Files</p>
                         <div className="flex flex-wrap gap-2">
-                          <Badge variant="outline"><FileText className="w-3 h-3 mr-1" /> 3 Drawing Sets</Badge>
-                          <Badge variant="outline"><FolderOpen className="w-3 h-3 mr-1" /> 142 Sheets</Badge>
+                          <Badge variant="outline">
+                            <FileText className="w-3 h-3 mr-1" /> 
+                            {uploadedFiles.filter(f => f.status === 'complete').length} Drawing Sets
+                          </Badge>
+                          <Badge variant="outline">
+                            <FolderOpen className="w-3 h-3 mr-1" /> 
+                            {uploadedFiles.filter(f => f.status === 'complete').reduce((sum, f) => sum + (f.sheetCount || 0), 0)} Sheets
+                          </Badge>
+                          <Badge variant="outline">
+                            {uploadedFiles.filter(f => f.status === 'complete').reduce((sum, f) => sum + (f.blockCount || 0), 0)} Blocks
+                          </Badge>
                         </div>
+                        
+                        {uploadedFiles.some(f => f.status === 'processing') && (
+                          <div className="mt-3 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                            <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                              <span className="text-sm">
+                                {uploadedFiles.filter(f => f.status === 'processing').length} file(s) still processing...
+                              </span>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
 
