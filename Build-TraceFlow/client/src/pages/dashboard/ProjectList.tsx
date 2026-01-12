@@ -3,38 +3,40 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
-import { Plus, Clock, ArrowRight, Building2, AlertTriangle, FileText } from "lucide-react";
+import { Plus, Clock, ArrowRight, Building2, AlertTriangle, Loader2 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import api from "@/lib/api";
 
 export default function ProjectList() {
-  const projects = [
-    {
-      id: "123",
-      name: "Memorial Hospital Expansion",
-      location: "Boston, MA",
-      status: "Active",
-      lastActivity: "2 hours ago",
-      changes: 14,
-      costImpact: "+$124k"
-    },
-    {
-      id: "124",
-      name: "Downtown Lab Complex",
-      location: "Cambridge, MA",
-      status: "Active",
-      lastActivity: "1 day ago",
-      changes: 3,
-      costImpact: "+$12k"
-    },
-    {
-      id: "125",
-      name: "Seaport Multifamily Tower",
-      location: "Boston, MA",
-      status: "Archived",
-      lastActivity: "2 months ago",
-      changes: 0,
-      costImpact: "$0"
-    }
-  ];
+  // Fetch real projects from API
+  const { data: projects, isLoading } = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => api.projects.list(),
+  });
+
+  // Format time ago
+  const timeAgo = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffHrs = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    
+    if (diffHrs < 1) return 'Just now';
+    if (diffHrs < 24) return `${diffHrs} hour${diffHrs > 1 ? 's' : ''} ago`;
+    if (diffDays < 30) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+    return `${Math.floor(diffDays / 30)} month${Math.floor(diffDays / 30) > 1 ? 's' : ''} ago`;
+  };
+
+  if (isLoading) {
+    return (
+      <DashboardLayout>
+        <div className="flex items-center justify-center h-96">
+          <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>
@@ -52,13 +54,13 @@ export default function ProjectList() {
         </div>
 
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-          {projects.map((project) => (
+          {projects && projects.map((project) => (
             <Link key={project.id} href={`/project/${project.id}`}>
               <Card className="hover:shadow-md transition-shadow cursor-pointer border-border group">
                 <CardHeader className="pb-3">
                   <div className="flex justify-between items-start">
-                    <Badge variant={project.status === "Active" ? "default" : "secondary"} className="mb-2">
-                      {project.status}
+                    <Badge variant="default" className="mb-2">
+                      Active
                     </Badge>
                     <div className="p-2 bg-muted rounded-full group-hover:bg-primary/10 group-hover:text-primary transition-colors">
                       <ArrowRight className="w-4 h-4 -rotate-45" />
@@ -66,26 +68,23 @@ export default function ProjectList() {
                   </div>
                   <CardTitle className="leading-tight">{project.name}</CardTitle>
                   <CardDescription className="flex items-center gap-1">
-                    <Building2 className="w-3 h-3" /> {project.location}
+                    <Building2 className="w-3 h-3" /> {project.address || 'No address'}
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-2 gap-4 pt-4 border-t border-border">
                     <div>
-                      <p className="text-xs text-muted-foreground mb-1">Unresolved Changes</p>
-                      <div className="flex items-center gap-2">
-                         <span className="text-xl font-bold font-display">{project.changes}</span>
-                         {project.changes > 0 && <AlertTriangle className="w-4 h-4 text-amber-500" />}
-                      </div>
+                      <p className="text-xs text-muted-foreground mb-1">Project Type</p>
+                      <span className="text-sm font-medium capitalize">{project.project_type || '—'}</span>
                     </div>
                     <div>
-                      <p className="text-xs text-muted-foreground mb-1">Est. Cost Impact</p>
-                      <span className="text-xl font-bold font-display text-muted-foreground">{project.costImpact}</span>
+                      <p className="text-xs text-muted-foreground mb-1">Phase</p>
+                      <span className="text-sm font-medium capitalize">{project.phase || '—'}</span>
                     </div>
                   </div>
                   <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground bg-muted/30 p-2 rounded">
                     <Clock className="w-3 h-3" />
-                    Last activity {project.lastActivity}
+                    Created {timeAgo(project.created_at)}
                   </div>
                 </CardContent>
               </Card>
