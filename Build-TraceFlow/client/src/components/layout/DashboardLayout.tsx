@@ -68,6 +68,13 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     enabled: !!projectId,
   });
 
+  // Fetch drawings for this project (needed for block lookup)
+  const { data: drawings } = useQuery({
+    queryKey: ['project', projectId, 'drawings'],
+    queryFn: () => api.drawings.listByProject(projectId!),
+    enabled: !!projectId,
+  });
+
   // Fetch comparisons for this project
   const { data: comparisonsData } = useQuery({
     queryKey: ['project', projectId, 'comparisons'],
@@ -75,13 +82,78 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     enabled: !!projectId,
   });
 
+  // Fetch block details for comparisons to get readable names
+  const { data: comparisonBlocks } = useQuery({
+    queryKey: ['project', projectId, 'comparison-blocks', comparisonsData?.map(c => `${c.sheet_a_id}-${c.sheet_b_id}`).join(',')],
+    queryFn: async () => {
+      if (!comparisonsData || comparisonsData.length === 0) return {};
+      
+      // Get all unique block IDs
+      const blockIds = new Set<string>();
+      comparisonsData.forEach(c => {
+        if (c.sheet_a_id) blockIds.add(c.sheet_a_id);
+        if (c.sheet_b_id) blockIds.add(c.sheet_b_id);
+      });
+      
+      // Fetch all blocks for the project and create a map
+      const allBlocks: Record<string, { description?: string; type?: string }> = {};
+      
+      try {
+        // Fetch blocks from all drawings in the project
+        if (projectId && drawings) {
+          const blocksPromises = drawings.map(d => 
+            api.drawings.getBlocks(d.id).catch(() => [])
+          );
+          const blocksArrays = await Promise.all(blocksPromises);
+          const allBlocksList = blocksArrays.flat();
+          
+          allBlocksList.forEach(block => {
+            allBlocks[block.id] = {
+              description: block.description,
+              type: block.type || undefined,
+            };
+          });
+        }
+      } catch (error) {
+        console.error('Error fetching blocks for comparisons:', error);
+      }
+      
+      return allBlocks;
+    },
+    enabled: !!comparisonsData && comparisonsData.length > 0 && !!projectId,
+  });
+
   // Use real project name if available, otherwise fall back to mock
   const projectName = project?.name || mockProjectName;
+  
+  // Format comparison names with block descriptions
+  const formatComparisonName = (c: any) => {
+    if (!comparisonBlocks) {
+      return `Comparison #${c.id.slice(0, 6)}`;
+    }
+    
+    const blockA = c.sheet_a_id ? comparisonBlocks[c.sheet_a_id] : null;
+    const blockB = c.sheet_b_id ? comparisonBlocks[c.sheet_b_id] : null;
+    
+    if (blockA && blockB) {
+      const nameA = blockA.description || blockA.type || 'Block A';
+      const nameB = blockB.description || blockB.type || 'Block B';
+      return `${nameA} vs ${nameB}`;
+    } else if (blockA) {
+      const nameA = blockA.description || blockA.type || 'Block A';
+      return `${nameA} vs Block B`;
+    } else if (blockB) {
+      const nameB = blockB.description || blockB.type || 'Block B';
+      return `Block A vs ${nameB}`;
+    }
+    
+    return `Comparison #${c.id.slice(0, 6)}`;
+  };
   
   // Combine mock and real comparisons
   const apiComparisons = comparisonsData?.slice(0, 5).map(c => ({
     id: c.id,
-    name: `Comparison #${c.id.slice(0, 6)}`,
+    name: formatComparisonName(c),
     date: new Date(c.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
     isProcessed: c.status === 'completed',
   })) || [];

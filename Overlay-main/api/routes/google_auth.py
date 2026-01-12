@@ -44,7 +44,9 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
 
 def get_redirect_uri(request: Request) -> str:
     """Get the OAuth callback redirect URI."""
-    # Use configured base URL or construct from request
+    # Use configured redirect URI if set, otherwise construct from request
+    if settings.google_redirect_uri:
+        return settings.google_redirect_uri
     base_url = str(request.base_url).rstrip("/")
     return f"{base_url}/api/auth/google/callback"
 
@@ -183,6 +185,10 @@ async def get_google_auth_url(request: Request):
         )
 
     redirect_uri = get_redirect_uri(request)
+    # Debug: log the redirect URI being used
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"Using redirect URI: {redirect_uri}, configured: {settings.google_redirect_uri}")
 
     params = {
         "client_id": settings.google_client_id,

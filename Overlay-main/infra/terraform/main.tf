@@ -15,10 +15,12 @@ terraform {
     }
   }
 
-  backend "gcs" {
-    bucket = "buildtrace-terraform-state"
-    prefix = "terraform/state"
-  }
+  # Backend temporarily disabled - using local state
+  # Uncomment and configure after fixing authentication:
+  # backend "gcs" {
+  #   bucket = "buildtrace-terraform-state"
+  #   prefix = "terraform/state"
+  # }
 }
 
 provider "google" {
@@ -32,29 +34,32 @@ provider "google-beta" {
 }
 
 # Enable required APIs
-resource "google_project_service" "apis" {
-  for_each = toset([
-    "run.googleapis.com",
-    "sqladmin.googleapis.com",
-    "storage.googleapis.com",
-    "pubsub.googleapis.com",
-    "artifactregistry.googleapis.com",
-    "secretmanager.googleapis.com",
-    "compute.googleapis.com",
-    "servicenetworking.googleapis.com",
-    "cloudresourcemanager.googleapis.com",
-  ])
-
-  service            = each.key
-  disable_on_destroy = false
-}
+# NOTE: APIs are already enabled manually via console
+# If you need to manage them with Terraform, uncomment this block
+# and ensure you have Service Usage Admin permissions
+# resource "google_project_service" "apis" {
+#   for_each = toset([
+#     "run.googleapis.com",
+#     "sqladmin.googleapis.com",
+#     "storage.googleapis.com",
+#     "pubsub.googleapis.com",
+#     "artifactregistry.googleapis.com",
+#     "secretmanager.googleapis.com",
+#     "compute.googleapis.com",
+#     "servicenetworking.googleapis.com",
+#     "cloudresourcemanager.googleapis.com",
+#   ])
+#
+#   service            = each.key
+#   disable_on_destroy = false
+# }
 
 # VPC for private services
 resource "google_compute_network" "main" {
   name                    = "buildtrace-vpc"
   auto_create_subnetworks = false
 
-  depends_on = [google_project_service.apis]
+  # APIs already enabled manually - no dependency needed
 }
 
 resource "google_compute_subnetwork" "main" {
@@ -62,6 +67,32 @@ resource "google_compute_subnetwork" "main" {
   ip_cidr_range = "10.0.0.0/24"
   region        = var.region
   network       = google_compute_network.main.id
+}
+
+# Private Services Connection for Cloud SQL
+resource "google_compute_global_address" "private_ip_range" {
+  name          = "buildtrace-private-ip-range"
+  purpose       = "VPC_PEERING"
+  address_type  = "INTERNAL"
+  prefix_length = 16
+  network       = google_compute_network.main.id
+}
+
+resource "google_service_networking_connection" "private_vpc_connection" {
+  network                 = google_compute_network.main.id
+  service                 = "servicenetworking.googleapis.com"
+  reserved_peering_ranges = [google_compute_global_address.private_ip_range.name]
+}
+
+# VPC Connector for Cloud Run to access private IP Cloud SQL
+resource "google_vpc_access_connector" "main" {
+  name          = "buildtrace-vpc-connector"
+  region        = var.region
+  network       = google_compute_network.main.name
+  ip_cidr_range = "10.8.0.0/28"  # Small range for connector
+  machine_type  = "e2-micro"
+  min_instances = 2
+  max_instances = 3
 }
 
 # Cloud SQL PostgreSQL Instance
@@ -107,13 +138,17 @@ resource "google_sql_database_instance" "main" {
     }
   }
 
-  depends_on = [google_project_service.apis]
+  # Wait for private services connection before creating Cloud SQL
+  depends_on = [google_service_networking_connection.private_vpc_connection]
 }
 
 resource "google_sql_database" "main" {
   name     = "buildtrace"
   instance = google_sql_database_instance.main.name
 }
+
+# Note: pgvector extension can be enabled manually after database creation if needed
+# Connect to the database and run: CREATE EXTENSION IF NOT EXISTS vector;
 
 resource "google_sql_user" "main" {
   name     = "buildtrace"
@@ -134,12 +169,43 @@ resource "google_secret_manager_secret" "db_password" {
     auto {}
   }
 
-  depends_on = [google_project_service.apis]
+  # APIs already enabled manually - no dependency needed
 }
 
 resource "google_secret_manager_secret_version" "db_password" {
   secret      = google_secret_manager_secret.db_password.id
   secret_data = random_password.db_password.result
+}
+
+# OpenAI API Key secret (set value via console or gcloud)
+resource "google_secret_manager_secret" "openai_api_key" {
+  secret_id = "openai-api-key"
+
+  replication {
+    auto {}
+  }
+}
+
+# Gemini API Key secret (set value via console or gcloud)
+resource "google_secret_manager_secret" "gemini_api_key" {
+  secret_id = "gemini-api-key"
+
+  replication {
+    auto {}
+  }
+}
+
+# Create secret versions (using variables from terraform.tfvars)
+resource "google_secret_manager_secret_version" "openai_api_key" {
+  count       = var.openai_api_key != "" ? 1 : 0
+  secret      = google_secret_manager_secret.openai_api_key.id
+  secret_data = var.openai_api_key
+}
+
+resource "google_secret_manager_secret_version" "gemini_api_key" {
+  count       = var.gemini_api_key != "" ? 1 : 0
+  secret      = google_secret_manager_secret.gemini_api_key.id
+  secret_data = var.gemini_api_key
 }
 
 # Cloud Storage Buckets
@@ -171,7 +237,7 @@ resource "google_storage_bucket" "uploads" {
     max_age_seconds = 3600
   }
 
-  depends_on = [google_project_service.apis]
+  # APIs already enabled manually - no dependency needed
 }
 
 resource "google_storage_bucket" "overlays" {
@@ -191,7 +257,7 @@ resource "google_storage_bucket" "overlays" {
     }
   }
 
-  depends_on = [google_project_service.apis]
+  # APIs already enabled manually - no dependency needed
 }
 
 # Pub/Sub Topics and Subscriptions
@@ -200,7 +266,7 @@ resource "google_pubsub_topic" "vision" {
 
   message_retention_duration = "86400s" # 1 day
 
-  depends_on = [google_project_service.apis]
+  # APIs already enabled manually - no dependency needed
 }
 
 resource "google_pubsub_subscription" "vision_worker" {
@@ -223,7 +289,7 @@ resource "google_pubsub_subscription" "vision_worker" {
 resource "google_pubsub_topic" "vision_dlq" {
   name = "vision-dlq"
 
-  depends_on = [google_project_service.apis]
+  # APIs already enabled manually - no dependency needed
 }
 
 # Artifact Registry for Docker images
@@ -233,67 +299,103 @@ resource "google_artifact_registry_repository" "main" {
   format        = "DOCKER"
   description   = "Docker images for BuildTrace services"
 
-  depends_on = [google_project_service.apis]
+  # APIs already enabled manually - no dependency needed
 }
 
 # Service Account for Cloud Run services
+# NOTE: Service accounts already exist and are managed outside Terraform
+# API: buildtrace-api@buildtrace-dev-484112.iam.gserviceaccount.com
+# Worker: buildtrace-worker@buildtrace-dev-484112.iam.gserviceaccount.com
+# 
+# If you need to manage them with Terraform, uncomment below and ensure proper IAM permissions
+# resource "google_service_account" "api" {
+#   account_id   = "buildtrace-api"
+#   display_name = "BuildTrace API Service Account"
+# }
+#
+# resource "google_service_account" "worker" {
+#   account_id   = "buildtrace-worker"
+#   display_name = "BuildTrace Worker Service Account"
+# }
+
+# Create service accounts (fresh project, we have full permissions)
 resource "google_service_account" "api" {
   account_id   = "buildtrace-api"
   display_name = "BuildTrace API Service Account"
+  project      = var.project_id
 }
 
 resource "google_service_account" "worker" {
   account_id   = "buildtrace-worker"
   display_name = "BuildTrace Worker Service Account"
+  project      = var.project_id
+}
+
+locals {
+  api_service_account_email    = google_service_account.api.email
+  worker_service_account_email = google_service_account.worker.email
 }
 
 # IAM bindings
 resource "google_project_iam_member" "api_storage" {
   project = var.project_id
   role    = "roles/storage.objectAdmin"
-  member  = "serviceAccount:${google_service_account.api.email}"
+  member  = "serviceAccount:${local.api_service_account_email}"
 }
 
 resource "google_project_iam_member" "api_sql" {
   project = var.project_id
   role    = "roles/cloudsql.client"
-  member  = "serviceAccount:${google_service_account.api.email}"
+  member  = "serviceAccount:${local.api_service_account_email}"
 }
 
 resource "google_project_iam_member" "api_pubsub" {
   project = var.project_id
   role    = "roles/pubsub.publisher"
-  member  = "serviceAccount:${google_service_account.api.email}"
+  member  = "serviceAccount:${local.api_service_account_email}"
 }
 
 resource "google_project_iam_member" "worker_storage" {
   project = var.project_id
   role    = "roles/storage.objectAdmin"
-  member  = "serviceAccount:${google_service_account.worker.email}"
+  member  = "serviceAccount:${local.worker_service_account_email}"
 }
 
 resource "google_project_iam_member" "worker_sql" {
   project = var.project_id
   role    = "roles/cloudsql.client"
-  member  = "serviceAccount:${google_service_account.worker.email}"
+  member  = "serviceAccount:${local.worker_service_account_email}"
 }
 
 resource "google_project_iam_member" "worker_pubsub" {
   project = var.project_id
   role    = "roles/pubsub.subscriber"
-  member  = "serviceAccount:${google_service_account.worker.email}"
+  member  = "serviceAccount:${local.worker_service_account_email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "api_db_password" {
   secret_id = google_secret_manager_secret.db_password.id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.api.email}"
+  member    = "serviceAccount:${local.api_service_account_email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "worker_db_password" {
   secret_id = google_secret_manager_secret.db_password.id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.worker.email}"
+  member    = "serviceAccount:${local.worker_service_account_email}"
+}
+
+# Grant worker access to OpenAI and Gemini API keys
+resource "google_secret_manager_secret_iam_member" "worker_openai_key" {
+  secret_id = google_secret_manager_secret.openai_api_key.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${local.worker_service_account_email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "worker_gemini_key" {
+  secret_id = google_secret_manager_secret.gemini_api_key.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${local.worker_service_account_email}"
 }
 
 # Cloud Run - API Service
@@ -303,10 +405,21 @@ resource "google_cloud_run_v2_service" "api" {
   ingress  = "INGRESS_TRAFFIC_ALL"
 
   template {
-    service_account = google_service_account.api.email
+    service_account = local.api_service_account_email
+    
+    # VPC access for private IP Cloud SQL
+    vpc_access {
+      connector = google_vpc_access_connector.main.id
+      egress    = "PRIVATE_RANGES_ONLY"
+    }
 
     containers {
       image = "${var.region}-docker.pkg.dev/${var.project_id}/buildtrace/api:${var.api_image_tag}"
+
+      # API listens on port 8000
+      ports {
+        container_port = 8000
+      }
 
       resources {
         limits = {
@@ -315,9 +428,30 @@ resource "google_cloud_run_v2_service" "api" {
         }
       }
 
+      # Database connection - API constructs DATABASE_URL from components
       env {
-        name  = "DATABASE_URL"
-        value = "postgresql://buildtrace:${random_password.db_password.result}@/buildtrace?host=/cloudsql/${google_sql_database_instance.main.connection_name}"
+        name = "DB_PASSWORD"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.db_password.secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      env {
+        name  = "DB_USER"
+        value = "buildtrace"
+      }
+
+      env {
+        name  = "DB_NAME"
+        value = "buildtrace"
+      }
+
+      env {
+        name  = "CLOUD_SQL_CONNECTION_NAME"
+        value = google_sql_database_instance.main.connection_name
       }
 
       env {
@@ -340,6 +474,12 @@ resource "google_cloud_run_v2_service" "api" {
         value = google_pubsub_topic.vision.name
       }
 
+      # CORS origins - update with your frontend URL
+      env {
+        name  = "CORS_ORIGINS"
+        value = jsonencode(var.cors_origins)
+      }
+
       volume_mounts {
         name       = "cloudsql"
         mount_path = "/cloudsql"
@@ -355,7 +495,7 @@ resource "google_cloud_run_v2_service" "api" {
 
     scaling {
       min_instance_count = 0
-      max_instance_count = 10
+      max_instance_count = 2
     }
   }
 
@@ -365,7 +505,6 @@ resource "google_cloud_run_v2_service" "api" {
   }
 
   depends_on = [
-    google_project_service.apis,
     google_sql_database_instance.main,
   ]
 }
@@ -377,21 +516,53 @@ resource "google_cloud_run_v2_service" "overlay_worker" {
   ingress  = "INGRESS_TRAFFIC_INTERNAL_ONLY"
 
   template {
-    service_account = google_service_account.worker.email
+    service_account = local.worker_service_account_email
+    
+    # VPC access for private IP Cloud SQL
+    vpc_access {
+      connector = google_vpc_access_connector.main.id
+      egress    = "PRIVATE_RANGES_ONLY"
+    }
 
     containers {
       image = "${var.region}-docker.pkg.dev/${var.project_id}/buildtrace/overlay-worker:${var.worker_image_tag}"
 
       resources {
         limits = {
-          cpu    = "8"
-          memory = "16Gi"
+          cpu    = "2"
+          memory = "4Gi"
         }
       }
 
+      # Database connection - worker uses separate env vars
       env {
-        name  = "DATABASE_URL"
-        value = "postgresql://buildtrace:${random_password.db_password.result}@/buildtrace?host=/cloudsql/${google_sql_database_instance.main.connection_name}"
+        name  = "DB_HOST"
+        value = "/cloudsql/${google_sql_database_instance.main.connection_name}"
+      }
+
+      env {
+        name  = "DB_PORT"
+        value = "5432"
+      }
+
+      env {
+        name  = "DB_NAME"
+        value = "buildtrace"
+      }
+
+      env {
+        name  = "DB_USER"
+        value = "buildtrace"
+      }
+
+      env {
+        name = "DB_PASSWORD"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.db_password.secret_id
+            version = "latest"
+          }
+        }
       }
 
       env {
@@ -410,8 +581,39 @@ resource "google_cloud_run_v2_service" "overlay_worker" {
       }
 
       env {
+        name  = "VISION_TOPIC"
+        value = google_pubsub_topic.vision.name
+      }
+
+      env {
         name  = "VISION_SUBSCRIPTION"
         value = google_pubsub_subscription.vision_worker.name
+      }
+
+      env {
+        name  = "VISION_TOPIC"
+        value = google_pubsub_topic.vision.name
+      }
+
+      # Secrets for API keys
+      env {
+        name = "OPENAI_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.openai_api_key.secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      env {
+        name = "GEMINI_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.gemini_api_key.secret_id
+            version = "latest"
+          }
+        }
       }
 
       volume_mounts {
@@ -428,8 +630,8 @@ resource "google_cloud_run_v2_service" "overlay_worker" {
     }
 
     scaling {
-      min_instance_count = 0
-      max_instance_count = 5
+      min_instance_count = 1  # Keep 1 instance always running for pull-based Pub/Sub
+      max_instance_count = 2
     }
 
     timeout = "900s" # 15 minutes for long-running jobs
@@ -441,7 +643,6 @@ resource "google_cloud_run_v2_service" "overlay_worker" {
   }
 
   depends_on = [
-    google_project_service.apis,
     google_sql_database_instance.main,
   ]
 }

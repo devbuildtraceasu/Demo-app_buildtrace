@@ -1,0 +1,21 @@
+# BuildTrace Terraform Variables
+# GCP Deployment Configuration
+
+# Required
+project_id = "buildtrace-prod"
+
+# Region - Update this to your preferred region
+region           = "us-central1"
+environment      = "development"
+db_tier          = "db-g1-small"
+db_disk_size     = 20
+api_image_tag    = "latest"
+worker_image_tag = "latest"
+
+# CORS origins - Update with your production frontend URL
+cors_origins = [
+  "http://localhost:3000",
+  "http://localhost:5000",
+  # Add your production frontend URL here
+  # "https://your-domain.com"
+]

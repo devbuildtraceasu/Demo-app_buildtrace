@@ -30,12 +30,12 @@ COPY --from=builder /app/dist/public /usr/share/nginx/html
 # Copy nginx configuration
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Expose port 80
-EXPOSE 80
+# Expose port 8080 (Cloud Run default)
+EXPOSE 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD wget --quiet --tries=1 --spider http://localhost/ || exit 1
+  CMD wget --quiet --tries=1 --spider http://localhost:8080/ || exit 1
 
 # Start nginx
 CMD ["nginx", "-g", "daemon off;"]

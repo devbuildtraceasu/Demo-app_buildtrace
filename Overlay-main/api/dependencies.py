@@ -13,8 +13,9 @@ from api.config import settings
 if TYPE_CHECKING:
     from google.cloud import pubsub_v1
 
-# Database engine
-engine = create_engine(settings.database_url, echo=settings.debug)
+# Database engine - use constructed URL if in GCP
+database_url = settings.get_database_url()
+engine = create_engine(database_url, echo=settings.debug)
 
 
 def get_session() -> Generator[Session, None, None]:

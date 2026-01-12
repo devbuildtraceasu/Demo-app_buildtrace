@@ -3,7 +3,9 @@
  * Provides typed functions for all API endpoints
  */
 
-const API_BASE = import.meta.env.VITE_API_URL || '/api';
+// Ensure API_BASE includes /api prefix
+const BASE_URL = import.meta.env.VITE_API_URL || '';
+const API_BASE = BASE_URL.endsWith('/api') ? BASE_URL : BASE_URL ? `${BASE_URL}/api` : '/api';
 
 // Types
 export interface User {
