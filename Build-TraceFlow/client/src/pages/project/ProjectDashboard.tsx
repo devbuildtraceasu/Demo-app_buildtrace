@@ -6,6 +6,7 @@ import { ArrowUpRight, Calendar, DollarSign, FileDiff, Layers, MoreHorizontal, P
 import { Badge } from "@/components/ui/badge";
 import { useQuery } from "@tanstack/react-query";
 import api from "@/lib/api";
+import { useDrawingStatus } from "@/hooks/use-drawings";
 
 export default function ProjectDashboard() {
   const params = useParams<{ id: string }>();
@@ -176,20 +177,7 @@ export default function ProjectDashboard() {
               <div className="grid md:grid-cols-2 gap-4">
                 {drawings && drawings.length > 0 ? (
                   drawings.slice(0, 4).map((drawing) => (
-                    <Card key={drawing.id} className="hover:border-primary/30 transition-colors cursor-pointer">
-                      <CardContent className="p-4 flex items-center gap-4">
-                        <div className="w-10 h-10 rounded-lg bg-muted flex items-center justify-center">
-                          <FileText className="w-5 h-5 text-muted-foreground" />
-                        </div>
-                        <div className="flex-1">
-                          <p className="font-medium">{drawing.name || drawing.filename}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {drawing.sheet_count} sheets • {new Date(drawing.created_at).toLocaleDateString()}
-                          </p>
-                        </div>
-                        <Badge variant="outline" className="text-xs capitalize">{drawing.status || 'Uploaded'}</Badge>
-                      </CardContent>
-                    </Card>
+                    <DrawingCard key={drawing.id} drawing={drawing} />
                   ))
                 ) : (
                   <Card className="col-span-2 border-dashed">
@@ -251,15 +239,17 @@ export default function ProjectDashboard() {
                 <CardTitle className="text-sm font-medium">Quick Actions</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
-                <Link href="/project/123/new-overlay">
+                <Link href={`/project/${projectId}/new-overlay`}>
                   <Button variant="outline" className="w-full justify-start gap-2">
                     <FileDiff className="w-4 h-4" /> Start New Comparison
                   </Button>
                 </Link>
-                <Button variant="outline" className="w-full justify-start gap-2">
-                  <Upload className="w-4 h-4" /> Upload Drawing Set
-                </Button>
-                <Link href="/project/123/cost">
+                <Link href={`/project/${projectId}/drawings`}>
+                  <Button variant="outline" className="w-full justify-start gap-2">
+                    <Upload className="w-4 h-4" /> Upload Drawing Set
+                  </Button>
+                </Link>
+                <Link href={`/project/${projectId}/cost`}>
                   <Button variant="outline" className="w-full justify-start gap-2">
                     <DollarSign className="w-4 h-4" /> View Cost Report
                   </Button>
@@ -285,6 +275,54 @@ function StatCard({ title, value, trend, icon, trendUp }: any) {
         <p className={`text-xs ${trendUp === true ? "text-red-500" : trendUp === false ? "text-red-500" : "text-muted-foreground"} mt-1`}>
           {trend}
         </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Component to display drawing card with real-time status
+function DrawingCard({ drawing }: { drawing: any }) {
+  const { data: status, isLoading: statusLoading } = useDrawingStatus(drawing.id);
+  
+  const sheetCount = status?.sheet_count ?? 0;
+  const blockCount = status?.block_count ?? 0;
+  const processingStatus = status?.status || 'pending';
+  
+  // Determine badge variant and text
+  const getStatusBadge = () => {
+    switch (processingStatus) {
+      case 'completed':
+        return { variant: 'secondary' as const, text: 'Complete' };
+      case 'processing':
+        return { variant: 'default' as const, text: 'Processing' };
+      case 'failed':
+        return { variant: 'destructive' as const, text: 'Failed' };
+      default:
+        return { variant: 'outline' as const, text: 'Pending' };
+    }
+  };
+  
+  const statusBadge = getStatusBadge();
+  
+  return (
+    <Card className="hover:border-primary/30 transition-colors cursor-pointer">
+      <CardContent className="p-4 flex items-center gap-4">
+        <div className="w-10 h-10 rounded-lg bg-muted flex items-center justify-center">
+          {statusLoading || processingStatus === 'processing' ? (
+            <Loader2 className="w-5 h-5 text-muted-foreground animate-spin" />
+          ) : (
+            <FileText className="w-5 h-5 text-muted-foreground" />
+          )}
+        </div>
+        <div className="flex-1">
+          <p className="font-medium">{drawing.name || drawing.filename}</p>
+          <p className="text-xs text-muted-foreground">
+            {sheetCount} {sheetCount === 1 ? 'sheet' : 'sheets'} • {blockCount} {blockCount === 1 ? 'block' : 'blocks'} • {new Date(drawing.created_at).toLocaleDateString()}
+          </p>
+        </div>
+        <Badge variant={statusBadge.variant} className="text-xs capitalize">
+          {statusBadge.text}
+        </Badge>
       </CardContent>
     </Card>
   );
