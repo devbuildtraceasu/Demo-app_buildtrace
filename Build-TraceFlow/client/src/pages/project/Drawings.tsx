@@ -40,6 +40,53 @@ export default function Drawings() {
   const projectId = params?.id;
   const [viewMode, setViewMode] = useState<"grid" | "list">("list");
 
+  // Mock data for demo purposes
+  const mockDrawingSets = [
+    { 
+      id: "v1", 
+      name: "IFC Set", 
+      date: "Jan 12, 2024", 
+      sheets: 142, 
+      disciplines: ["Architectural", "Structural", "MEP"],
+      status: "Complete"
+    },
+    { 
+      id: "v2", 
+      name: "Bulletin 01", 
+      date: "Jan 20, 2024", 
+      sheets: 12, 
+      disciplines: ["Architectural", "Structural"],
+      status: "Complete"
+    },
+    { 
+      id: "v3", 
+      name: "Bulletin 02", 
+      date: "Feb 01, 2024", 
+      sheets: 8, 
+      disciplines: ["Architectural", "Mechanical"],
+      status: "Complete"
+    },
+    { 
+      id: "v4", 
+      name: "Bulletin 03", 
+      date: "Feb 15, 2024", 
+      sheets: 15, 
+      disciplines: ["Architectural", "Electrical", "Plumbing"],
+      status: "Processing"
+    },
+  ];
+
+  const mockSheets = [
+    { id: "A-101", name: "First Floor Plan", discipline: "Architectural", set: "Bulletin 03", date: "Feb 15", blockId: "mock-1", drawingId: "v4", uri: null },
+    { id: "A-102", name: "Second Floor Plan", discipline: "Architectural", set: "Bulletin 03", date: "Feb 15", blockId: "mock-2", drawingId: "v4", uri: null },
+    { id: "A-201", name: "Building Elevations", discipline: "Architectural", set: "Bulletin 03", date: "Feb 15", blockId: "mock-3", drawingId: "v4", uri: null },
+    { id: "S-101", name: "Foundation Plan", discipline: "Structural", set: "IFC Set", date: "Jan 12", blockId: "mock-4", drawingId: "v1", uri: null },
+    { id: "S-102", name: "Framing Plan Level 2", discipline: "Structural", set: "Bulletin 01", date: "Jan 20", blockId: "mock-5", drawingId: "v2", uri: null },
+    { id: "M-101", name: "HVAC Floor Plan L1", discipline: "Mechanical", set: "Bulletin 02", date: "Feb 01", blockId: "mock-6", drawingId: "v3", uri: null },
+    { id: "E-101", name: "Electrical Floor Plan L1", discipline: "Electrical", set: "Bulletin 03", date: "Feb 15", blockId: "mock-7", drawingId: "v4", uri: null },
+    { id: "P-101", name: "Plumbing Floor Plan L1", discipline: "Plumbing", set: "Bulletin 03", date: "Feb 15", blockId: "mock-8", drawingId: "v4", uri: null },
+  ];
+
   // Fetch real drawings from API
   const { data: drawings, isLoading } = useQuery({
     queryKey: ['project', projectId, 'drawings'],
@@ -68,19 +115,19 @@ export default function Drawings() {
     enabled: !!drawings && drawings.length > 0,
   });
 
-  const hasDrawings = drawings && drawings.length > 0;
-
-  // Group drawings as "sets"
-  const drawingSets = drawings?.map(d => ({
+  // Combine mock and real drawing sets
+  const apiDrawingSets = drawings?.map(d => ({
     id: d.id,
     name: d.name || `Drawing ${d.id.slice(0, 8)}`,
     date: new Date(d.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-    sheets: 0, // Will be populated from status
+    sheets: 0,
     disciplines: ['Architectural'],
     status: 'Complete',
   })) || [];
+  const drawingSets = [...mockDrawingSets, ...apiDrawingSets];
 
-  const sheets = allSheets?.map((s, idx) => ({
+  // Combine mock and real sheets
+  const apiSheets = allSheets?.map((s, idx) => ({
     id: `Sheet-${idx + 1}`,
     blockId: s.id,
     name: s.description || 'Plan Block',
@@ -90,6 +137,9 @@ export default function Drawings() {
     date: 'Recent',
     uri: s.uri,
   })) || [];
+  const sheets = [...mockSheets, ...apiSheets];
+
+  const hasDrawings = drawingSets.length > 0;
 
   if (isLoading) {
     return (

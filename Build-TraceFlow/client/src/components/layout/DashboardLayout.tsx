@@ -49,6 +49,18 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const isProjectRoute = location.includes("/project/");
   const projectId = isProjectRoute ? location.split("/")[2] : null;
 
+  // Mock data for demo purposes
+  const mockProjectName = "Memorial Hospital Expansion";
+  const mockComparisons = [
+    { id: "c1", name: "IFC vs Bulletin 01", date: "Jan 20", isProcessed: true },
+    { id: "c2", name: "Bulletin 01 vs 02", date: "Feb 01", isProcessed: true },
+    { id: "c3", name: "Bulletin 02 vs 03", date: "Feb 15", isProcessed: true },
+  ];
+  const mockAnalyses = [
+    { id: "a1", comparisonId: "c1", name: "IFC vs Bulletin 01", date: "Jan 21" },
+    { id: "a2", comparisonId: "c2", name: "Bulletin 01 vs 02", date: "Feb 02" },
+  ];
+
   // Fetch actual project data
   const { data: project } = useQuery({
     queryKey: ['project', projectId],
@@ -63,13 +75,18 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     enabled: !!projectId,
   });
 
-  const projectName = project?.name || "Loading...";
-  const comparisons = comparisonsData?.slice(0, 5).map(c => ({
+  // Use real project name if available, otherwise fall back to mock
+  const projectName = project?.name || mockProjectName;
+  
+  // Combine mock and real comparisons
+  const apiComparisons = comparisonsData?.slice(0, 5).map(c => ({
     id: c.id,
     name: `Comparison #${c.id.slice(0, 6)}`,
     date: new Date(c.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
     isProcessed: c.status === 'completed',
   })) || [];
+  const comparisons = [...mockComparisons, ...apiComparisons];
+  const analyses = mockAnalyses;
 
   return (
     <div className="min-h-screen bg-background flex">
@@ -178,10 +195,36 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                     </CollapsibleContent>
                   </Collapsible>
 
-                  {/* Cost & Schedule Section */}
-                  <SidebarItem href={`/project/${projectId}/cost`} icon={<BarChart3 className="w-4 h-4" />} active={location.includes('/cost')}>
-                    Cost & Schedule
-                  </SidebarItem>
+                  {/* Cost & Schedule Section - separate but linked */}
+                  <Collapsible open={analysisExpanded} onOpenChange={setAnalysisExpanded}>
+                    <CollapsibleTrigger asChild>
+                      <div className="flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:bg-sidebar-accent/50 cursor-pointer">
+                        <div className="flex items-center gap-3">
+                          <BarChart3 className="w-4 h-4" />
+                          <span>Cost & Schedule</span>
+                        </div>
+                        <ChevronRight className={`w-3 h-3 transition-transform ${analysisExpanded ? 'rotate-90' : ''}`} />
+                      </div>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="pl-6 space-y-0.5 mt-1">
+                      {analyses.length === 0 ? (
+                        <div className="px-3 py-1.5 text-xs text-muted-foreground/60 italic">
+                          No analyses yet
+                        </div>
+                      ) : (
+                        analyses.map((a) => (
+                          <Link key={a.id} href={`/project/${projectId}/cost`}>
+                            <div className={`px-3 py-1.5 text-xs rounded-md cursor-pointer flex items-center justify-between hover:bg-sidebar-accent/50 ${location.includes('/cost') ? 'bg-sidebar-accent text-foreground' : 'text-muted-foreground'}`}>
+                              <div className="flex items-center gap-1.5">
+                                <span className="truncate">{a.name}</span>
+                              </div>
+                              <span className="text-[10px] text-muted-foreground/60">{a.date}</span>
+                            </div>
+                          </Link>
+                        ))
+                      )}
+                    </CollapsibleContent>
+                  </Collapsible>
 
                   <SidebarItem href={`/project/${projectId}/drawings`} icon={<Layers className="w-4 h-4" />} active={location.includes('/drawings')}>
                     Drawings
