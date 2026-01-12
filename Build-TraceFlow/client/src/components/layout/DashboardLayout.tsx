@@ -30,10 +30,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import logo from "@assets/BuildTrace_Logo_1767832159404.jpg";
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import api from "@/lib/api";
 
 interface DashboardLayoutProps {
   children: React.ReactNode;
@@ -48,17 +49,44 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const isProjectRoute = location.includes("/project/");
   const projectId = isProjectRoute ? location.split("/")[2] : null;
 
-  // Mock data for hierarchy display
-  const projectName = "Memorial Hospital Expansion";
-  const comparisons = [
+  // Mock data for demo purposes
+  const mockProjectName = "Memorial Hospital Expansion";
+  const mockComparisons = [
     { id: "c1", name: "IFC vs Bulletin 01", date: "Jan 20", isProcessed: true },
     { id: "c2", name: "Bulletin 01 vs 02", date: "Feb 01", isProcessed: true },
     { id: "c3", name: "Bulletin 02 vs 03", date: "Feb 15", isProcessed: true },
   ];
-  const analyses = [
+  const mockAnalyses = [
     { id: "a1", comparisonId: "c1", name: "IFC vs Bulletin 01", date: "Jan 21" },
     { id: "a2", comparisonId: "c2", name: "Bulletin 01 vs 02", date: "Feb 02" },
   ];
+
+  // Fetch actual project data
+  const { data: project } = useQuery({
+    queryKey: ['project', projectId],
+    queryFn: () => api.projects.get(projectId!),
+    enabled: !!projectId,
+  });
+
+  // Fetch comparisons for this project
+  const { data: comparisonsData } = useQuery({
+    queryKey: ['project', projectId, 'comparisons'],
+    queryFn: () => api.comparisons.listByProject(projectId!),
+    enabled: !!projectId,
+  });
+
+  // Use real project name if available, otherwise fall back to mock
+  const projectName = project?.name || mockProjectName;
+  
+  // Combine mock and real comparisons
+  const apiComparisons = comparisonsData?.slice(0, 5).map(c => ({
+    id: c.id,
+    name: `Comparison #${c.id.slice(0, 6)}`,
+    date: new Date(c.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+    isProcessed: c.status === 'completed',
+  })) || [];
+  const comparisons = [...mockComparisons, ...apiComparisons];
+  const analyses = mockAnalyses;
 
   return (
     <div className="min-h-screen bg-background flex">
@@ -237,29 +265,12 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           <div className="flex items-center gap-4 flex-1">
             {isProjectRoute ? (
                <div className="flex items-center gap-2">
-                 <span className="text-muted-foreground">Projects /</span>
-                 <DropdownMenu>
-                   <DropdownMenuTrigger asChild>
-                     <Button variant="ghost" className="font-semibold px-2 -ml-2 h-8 text-foreground">
-                       {projectName}
-                       <ChevronDown className="ml-2 w-4 h-4 opacity-50" />
-                     </Button>
-                   </DropdownMenuTrigger>
-                   <DropdownMenuContent align="start" className="w-56">
-                     <DropdownMenuItem>
-                       <FolderOpen className="mr-2 w-4 h-4 text-muted-foreground" />
-                       Memorial Hospital Expansion
-                     </DropdownMenuItem>
-                     <DropdownMenuItem>
-                       <FolderOpen className="mr-2 w-4 h-4 text-muted-foreground" />
-                       Downtown Lab Complex
-                     </DropdownMenuItem>
-                     <DropdownMenuSeparator />
-                     <DropdownMenuItem>
-                       View All Projects
-                     </DropdownMenuItem>
-                   </DropdownMenuContent>
-                 </DropdownMenu>
+                 <Link href="/dashboard">
+                   <span className="text-muted-foreground hover:text-foreground cursor-pointer">Projects /</span>
+                 </Link>
+                 <Button variant="ghost" className="font-semibold px-2 -ml-2 h-8 text-foreground">
+                   {projectName}
+                 </Button>
                </div>
             ) : (
               <div className="relative w-96 hidden md:block">
