@@ -1,14 +1,17 @@
 """Job routes for tracking processing status."""
 
+import asyncio
+import json
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import Column
 from sqlalchemy.dialects.postgresql import JSON
 from sqlmodel import Field, SQLModel, select
 
-from api.dependencies import CurrentUser, SessionDep
+from api.dependencies import CurrentUser, OptionalUser, SessionDep
 from api.schemas.job import JobCreate, JobResponse, JobStatus
 
 router = APIRouter()
@@ -141,6 +144,79 @@ async def cancel_job(job_id: str, session: SessionDep, user: CurrentUser):
         events=job.events or [],
         created_at=job.created_at,
         updated_at=job.updated_at,
+    )
+
+
+# Server-Sent Events (SSE) for real-time job updates
+@router.get("/sse/{job_id}")
+async def job_status_sse(
+    job_id: str,
+    session: SessionDep,
+    user: OptionalUser = None,  # Allow unauthenticated for easier testing
+):
+    """Server-Sent Events endpoint for real-time job status updates.
+
+    Alternative to WebSocket that's simpler to implement and works better with
+    HTTP/1.1 and standard load balancers.
+    """
+
+    async def event_generator():
+        """Generate SSE events by polling the database."""
+        last_status = None
+        last_update_time = None
+
+        while True:
+            # Fetch job from database
+            job = session.get(Job, job_id)
+
+            if not job:
+                # Job not found, send error and close
+                yield f"event: error\ndata: {json.dumps({'error': 'Job not found'})}\n\n"
+                break
+
+            # Check if job has been updated
+            if job.status != last_status or job.updated_at != last_update_time:
+                # Send status update
+                data = {
+                    "job_id": job.id,
+                    "status": job.status,
+                    "type": job.type,
+                    "target_type": job.target_type,
+                    "target_id": job.target_id,
+                    "updated_at": job.updated_at.isoformat(),
+                    "events": job.events or [],
+                }
+
+                # Calculate progress if available
+                if job.events:
+                    progress_events = [
+                        e for e in job.events if e.get("type") == "progress"
+                    ]
+                    if progress_events:
+                        latest_progress = progress_events[-1]
+                        data["progress"] = latest_progress.get("progress", 0)
+
+                yield f"event: status_update\ndata: {json.dumps(data)}\n\n"
+
+                last_status = job.status
+                last_update_time = job.updated_at
+
+                # If job is in terminal state, close connection
+                if job.status in ["Completed", "Failed", "Canceled"]:
+                    yield f"event: complete\ndata: {json.dumps({'job_id': job.id, 'status': job.status})}\n\n"
+                    break
+
+            # Poll every 2 seconds
+            await asyncio.sleep(2)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable buffering in nginx
+        },
     )
 
 
