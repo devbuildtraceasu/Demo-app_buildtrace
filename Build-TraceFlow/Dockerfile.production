@@ -1,0 +1,47 @@
+# BuildTrace Frontend Dockerfile - Production with Node.js Server
+# This runs the Express server for Google OAuth authentication
+
+# Stage 1: Build frontend assets
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy source files
+COPY . .
+
+# Build the application (creates dist/public and dist/index.cjs)
+ENV NODE_ENV=production
+RUN npm run build
+
+# Stage 2: Production runtime
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Copy package files and install production dependencies only
+COPY package*.json ./
+RUN npm ci --only=production
+
+# Copy built application from builder
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/shared ./shared
+
+# Set environment
+ENV NODE_ENV=production
+ENV PORT=8080
+
+# Expose port 8080 (Cloud Run default)
+EXPOSE 8080
+
+# Health check - check if server responds
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:8080/api/auth/status', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"
+
+# Start the Express server
+CMD ["node", "dist/index.cjs"]

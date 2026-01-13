@@ -127,12 +127,27 @@ async def create_comparison(
     """Create a new comparison and submit job to worker."""
     import logging
     logger = logging.getLogger(__name__)
+    from api.routes.projects import Project
+    
+    # Validate that project exists
+    if comparison_data.project_id:
+        project = session.get(Project, comparison_data.project_id)
+        if not project:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Project not found: {comparison_data.project_id}. Please create the project first.",
+            )
+        if project.deleted_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Project has been deleted: {comparison_data.project_id}",
+            )
     
     # Get block IDs (use sheet_a_id/sheet_b_id if provided, otherwise drawing_a_id/drawing_b_id)
     block_a_id = comparison_data.sheet_a_id or comparison_data.drawing_a_id
     block_b_id = comparison_data.sheet_b_id or comparison_data.drawing_b_id
     
-    # Validate that blocks exist
+    # Validate that blocks exist and are not deleted
     from api.routes.drawings import Block
     block_a = session.get(Block, block_a_id)
     block_b = session.get(Block, block_b_id)
@@ -142,10 +157,20 @@ async def create_comparison(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Block A not found: {block_a_id}",
         )
+    if block_a.deleted_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Block A has been deleted: {block_a_id}",
+        )
     if not block_b:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Block B not found: {block_b_id}",
+        )
+    if block_b.deleted_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Block B has been deleted: {block_b_id}",
         )
     if not block_a.uri:
         raise HTTPException(
@@ -356,6 +381,19 @@ async def create_change(
     user: OptionalUser = None,
 ):
     """Create a new change for a comparison."""
+    # Validate that overlay exists
+    overlay = session.get(Overlay, comparison_id)
+    if not overlay:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Comparison (overlay) not found: {comparison_id}",
+        )
+    if overlay.deleted_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Comparison (overlay) has been deleted: {comparison_id}",
+        )
+    
     change = Change(
         id=generate_cuid(),
         overlay_id=comparison_id,

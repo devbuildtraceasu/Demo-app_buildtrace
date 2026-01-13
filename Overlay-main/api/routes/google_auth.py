@@ -46,9 +46,12 @@ def get_redirect_uri(request: Request) -> str:
     """Get the OAuth callback redirect URI."""
     # Use configured redirect URI if set, otherwise construct from request
     if settings.google_redirect_uri:
-        return settings.google_redirect_uri
+        # Strip any whitespace that might have been added
+        return settings.google_redirect_uri.strip()
     base_url = str(request.base_url).rstrip("/")
-    return f"{base_url}/api/auth/google/callback"
+    redirect_uri = f"{base_url}/api/auth/google/callback"
+    # Ensure no whitespace
+    return redirect_uri.strip()
 
 
 @router.get("/google/login")
@@ -100,7 +103,7 @@ async def google_callback(
             detail="Google OAuth is not configured",
         )
 
-    redirect_uri = get_redirect_uri(request)
+    redirect_uri = get_redirect_uri(request).strip()
 
     # Exchange code for tokens
     async with httpx.AsyncClient() as client:
@@ -168,7 +171,9 @@ async def google_callback(
     )
 
     # Redirect to frontend with token
-    frontend_url = settings.cors_origins[0] if settings.cors_origins else "http://localhost:3000"
+    # Use cors_origins_list (property that parses the string) not cors_origins (raw string)
+    cors_list = settings.cors_origins_list
+    frontend_url = cors_list[0] if cors_list else "http://localhost:3000"
     return RedirectResponse(
         url=f"{frontend_url}/auth?token={jwt_token}",
         status_code=status.HTTP_302_FOUND,
@@ -184,15 +189,15 @@ async def get_google_auth_url(request: Request):
             detail="Google OAuth is not configured",
         )
 
-    redirect_uri = get_redirect_uri(request)
+    redirect_uri = get_redirect_uri(request).strip()
     # Debug: log the redirect URI being used
     import logging
     logger = logging.getLogger(__name__)
-    logger.info(f"Using redirect URI: {redirect_uri}, configured: {settings.google_redirect_uri}")
+    logger.info(f"Using redirect URI: '{redirect_uri}', configured: {settings.google_redirect_uri}")
 
     params = {
         "client_id": settings.google_client_id,
-        "redirect_uri": redirect_uri,
+        "redirect_uri": redirect_uri.strip(),  # Ensure no whitespace
         "response_type": "code",
         "scope": "openid email profile",
         "access_type": "offline",

@@ -142,6 +142,20 @@ async def submit_manual_alignment(
     This computes the affine transformation and submits a job to re-render
     the overlay with the user-specified alignment.
     """
+    # Validate that overlay exists
+    from api.routes.comparisons import Overlay
+    overlay = session.get(Overlay, request.overlay_id)
+    if not overlay:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Overlay not found: {request.overlay_id}",
+        )
+    if overlay.deleted_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Overlay has been deleted: {request.overlay_id}",
+        )
+    
     # Validate the transformation
     try:
         matrix, scale, rotation_deg, translate_x, translate_y = compute_affine_from_points(

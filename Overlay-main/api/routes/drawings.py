@@ -112,6 +112,27 @@ async def create_drawing(
 ):
     """Create a new drawing and automatically trigger preprocessing."""
     from api.routes.jobs import Job as JobModel
+    from api.routes.projects import Project
+    
+    # Validate that project exists before creating drawing
+    # project_id is required (non-nullable in schema)
+    if not drawing_data.project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="project_id is required",
+        )
+    
+    project = session.get(Project, drawing_data.project_id)
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project not found: {drawing_data.project_id}. Please create the project first.",
+        )
+    if project.deleted_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project has been deleted: {drawing_data.project_id}",
+        )
     
     drawing = Drawing(
         id=generate_cuid(),

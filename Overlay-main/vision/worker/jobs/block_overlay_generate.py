@@ -89,8 +89,18 @@ def ensure_overlay(
 
     block_a = session.get(Block, payload.block_a_id)
     block_b = session.get(Block, payload.block_b_id)
-    if not block_a or not block_b:
-        raise ValueError("Blocks not found for overlay generation")
+    if not block_a:
+        raise ValueError(f"Block A not found: {payload.block_a_id}")
+    if not block_b:
+        raise ValueError(f"Block B not found: {payload.block_b_id}")
+    if block_a.deleted_at is not None:
+        raise ValueError(f"Block A has been deleted: {payload.block_a_id}")
+    if block_b.deleted_at is not None:
+        raise ValueError(f"Block B has been deleted: {payload.block_b_id}")
+    if not block_a.uri:
+        raise ValueError(f"Block A ({payload.block_a_id}) is missing image URI")
+    if not block_b.uri:
+        raise ValueError(f"Block B ({payload.block_b_id}) is missing image URI")
 
     overlay = Overlay(
         id=generate_cuid(),

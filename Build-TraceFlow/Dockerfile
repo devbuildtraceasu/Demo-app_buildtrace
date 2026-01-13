@@ -30,6 +30,11 @@ COPY --from=builder /app/dist/public /usr/share/nginx/html
 # Copy nginx configuration
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
+# Verify files exist (fail fast if build failed)
+RUN test -f /usr/share/nginx/html/index.html || (echo "ERROR: index.html not found in build output" && exit 1) && \
+    test -f /etc/nginx/conf.d/default.conf || (echo "ERROR: nginx.conf not found" && exit 1) && \
+    nginx -t || (echo "ERROR: nginx configuration test failed" && exit 1)
+
 # Expose port 8080 (Cloud Run default)
 EXPOSE 8080
 

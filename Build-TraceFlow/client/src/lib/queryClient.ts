@@ -49,9 +49,21 @@ export const queryClient = new QueryClient({
       refetchOnWindowFocus: false,
       staleTime: Infinity,
       retry: false,
+      onError: (error) => {
+        // Log errors in development
+        if (import.meta.env.DEV) {
+          console.error('[React Query Error]', error);
+        }
+      },
     },
     mutations: {
       retry: false,
+      onError: (error) => {
+        // Log errors in development
+        if (import.meta.env.DEV) {
+          console.error('[React Query Mutation Error]', error);
+        }
+      },
     },
   },
 });

@@ -49,6 +49,9 @@ app.add_middleware(
 )
 
 # Include routers
+# Register google_auth router FIRST to ensure Google OAuth routes take precedence
+app.include_router(google_auth.router, prefix="/api/auth", tags=["Google OAuth"])
+app.include_router(google_auth.router, prefix="/api/v1/auth", tags=["Google OAuth"])
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(projects.router, prefix="/api/projects", tags=["Projects"])
 app.include_router(drawings.router, prefix="/api/drawings", tags=["Drawings"])
@@ -56,8 +59,6 @@ app.include_router(comparisons.router, prefix="/api/comparisons", tags=["Compari
 app.include_router(uploads.router, prefix="/api/uploads", tags=["Uploads"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["Jobs"])
 app.include_router(alignment.router, prefix="/api/alignment", tags=["Alignment"])
-app.include_router(google_auth.router, prefix="/api/auth", tags=["Google OAuth"])
-app.include_router(google_auth.router, prefix="/api/v1/auth", tags=["Google OAuth"])
 app.include_router(analysis.router, prefix="/api/analysis", tags=["AI Analysis"])
 
 
