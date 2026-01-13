@@ -189,6 +189,10 @@ def run_drawing_job(
     drawing = session.get(Drawing, payload.drawing_id)
     if not drawing:
         raise ValueError(f"Drawing {payload.drawing_id} not found")
+    if drawing.deleted_at is not None:
+        raise ValueError(f"Drawing {payload.drawing_id} has been deleted")
+    if not drawing.uri:
+        raise ValueError(f"Drawing {payload.drawing_id} is missing URI")
 
     drawing_job = session.get(Job, envelope.job_id)
     if not drawing_job:

@@ -1,21 +1,21 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
+import { setupGoogleAuth, isAuthenticated } from "./auth/googleAuth";
 import { insertProjectSchema, insertDrawingSchema, insertOverlaySchema, insertChangeSchema, insertCostAnalysisSchema } from "@shared/schema";
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  // Setup authentication (MUST be before other routes)
-  await setupAuth(app);
-  registerAuthRoutes(app);
+  // Setup Google OAuth authentication (MUST be before other routes)
+  await setupGoogleAuth(app);
 
   // Projects API
   app.post("/api/projects", isAuthenticated, async (req: any, res) => {
     try {
-      const organizationId = req.user?.claims?.organization_id || "default-org";
+      // Get organization from user or default
+      const organizationId = req.user?.organization_id || req.user?.googleId || "default-org";
       const projectData = insertProjectSchema.parse({ ...req.body, organizationId });
       const project = await storage.createProject(projectData);
       res.json(project);
@@ -26,7 +26,8 @@ export async function registerRoutes(
 
   app.get("/api/projects", isAuthenticated, async (req: any, res) => {
     try {
-      const organizationId = req.user?.claims?.organization_id || "default-org";
+      // Get organization from user or default
+      const organizationId = req.user?.organization_id || req.user?.googleId || "default-org";
       const projects = await storage.getProjectsByOrganization(organizationId);
       res.json(projects);
     } catch (error: any) {

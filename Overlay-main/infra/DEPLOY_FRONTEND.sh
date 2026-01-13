@@ -29,10 +29,13 @@ IMAGE_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/frontend:${TAG}"
 LATEST_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/frontend:latest"
 
 # Build Docker image with API URL as build arg (no cache to ensure fresh build)
+# Ensure API URL includes /api suffix for proper routing
+API_URL_WITH_SUFFIX="${API_URL%/}/api"
 echo ""
 echo "Step 1: Building Docker image (AMD64) with tag ${TAG}..."
+echo "Using API URL: $API_URL_WITH_SUFFIX"
 docker build --platform linux/amd64 --no-cache \
-  --build-arg VITE_API_URL=$API_URL \
+  --build-arg VITE_API_URL=$API_URL_WITH_SUFFIX \
   -t $IMAGE_TAG \
   -t $LATEST_TAG \
   .
@@ -52,10 +55,11 @@ gcloud run deploy $SERVICE_NAME \
   --region $REGION \
   --allow-unauthenticated \
   --port 8080 \
-  --memory 256Mi \
+  --memory 512Mi \
   --cpu 1 \
   --min-instances 0 \
-  --max-instances 2
+  --max-instances 3 \
+  --set-env-vars="NODE_ENV=production"
 
 # Get the URL
 echo ""

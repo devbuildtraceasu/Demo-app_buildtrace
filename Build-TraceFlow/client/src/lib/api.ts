@@ -7,6 +7,12 @@
 const BASE_URL = import.meta.env.VITE_API_URL || '';
 const API_BASE = BASE_URL.endsWith('/api') ? BASE_URL : BASE_URL ? `${BASE_URL}/api` : '/api';
 
+// Log API configuration in development
+if (import.meta.env.DEV) {
+  console.log('[API Config] VITE_API_URL:', import.meta.env.VITE_API_URL);
+  console.log('[API Config] API_BASE:', API_BASE);
+}
+
 // Types
 export interface User {
   id: string;
@@ -159,18 +165,40 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
     (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_BASE}${url}`, {
-    ...options,
-    headers,
-  });
-
-  if (response.status === 401) {
-    setAuthToken(null);
-    window.location.href = '/auth';
-    throw new Error('Unauthorized');
+  const fullUrl = `${API_BASE}${url}`;
+  
+  // Log in development
+  if (import.meta.env.DEV) {
+    console.log('[API Request]', options.method || 'GET', fullUrl);
   }
 
-  return response;
+  try {
+    const response = await fetch(fullUrl, {
+      ...options,
+      headers,
+    });
+
+    if (response.status === 401) {
+      setAuthToken(null);
+      // Don't redirect immediately - let the component handle it
+      // This prevents breaking the UI flow
+      if (import.meta.env.DEV) {
+        console.warn('[API] Unauthorized - token cleared');
+      }
+      throw new Error('Unauthorized');
+    }
+
+    if (!response.ok && import.meta.env.DEV) {
+      console.error('[API Error]', response.status, response.statusText, fullUrl);
+    }
+
+    return response;
+  } catch (error) {
+    if (import.meta.env.DEV) {
+      console.error('[API Request Failed]', error, fullUrl);
+    }
+    throw error;
+  }
 }
 
 async function get<T>(url: string): Promise<T> {

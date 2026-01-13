@@ -65,34 +65,6 @@ async def logout():
     return {"message": "Logged out successfully"}
 
 
-@router.get("/google/url")
-async def get_google_auth_url():
-    """Get Google OAuth URL for login."""
-    if not settings.google_client_id:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Google OAuth not configured",
-        )
-
-    # Return OAuth URL (to be implemented with proper OAuth flow)
-    return {
-        "url": f"https://accounts.google.com/o/oauth2/v2/auth?client_id={settings.google_client_id}&response_type=code&scope=email%20profile&redirect_uri=http://localhost:8000/api/auth/google/callback"
-    }
-
-
-@router.get("/google/callback")
-async def google_callback(code: str):
-    """Handle Google OAuth callback."""
-    if not settings.google_client_id or not settings.google_client_secret:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Google OAuth not configured",
-        )
-
-    # Exchange code for tokens and get user info
-    # This is a placeholder - implement full OAuth flow in production
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Google OAuth callback not yet implemented",
-    )
+# Google OAuth routes are handled by google_auth.router
+# See api/routes/google_auth.py for full implementation
 

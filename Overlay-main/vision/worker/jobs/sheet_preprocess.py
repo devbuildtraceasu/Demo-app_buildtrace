@@ -140,6 +140,10 @@ def run_sheet_job(
     sheet = session.get(Sheet, payload.sheet_id)
     if not sheet:
         raise ValueError(f"Sheet {payload.sheet_id} not found")
+    if sheet.deleted_at is not None:
+        raise ValueError(f"Sheet {payload.sheet_id} has been deleted")
+    if not sheet.uri:
+        raise ValueError(f"Sheet {payload.sheet_id} is missing URI")
 
     sheet_job = session.get(Job, envelope.job_id)
     if not sheet_job:
