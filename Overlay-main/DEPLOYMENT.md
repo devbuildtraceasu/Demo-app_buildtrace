@@ -294,6 +294,8 @@ gcloud secrets add-iam-policy-binding openai-api-key \
 
 ### Step 6: Deploy Frontend
 
+**Note**: The frontend is a React + Vite application (not Next.js). Replit integration is development-only and not used in production. See `../Build-TraceFlow/ARCHITECTURE.md` for details.
+
 For the frontend, you have several options:
 
 **Option A: Firebase Hosting**

@@ -92,6 +92,7 @@ All services are deployed and operational on Google Cloud Platform.
   - CPU: 1
   - Memory: 256Mi
   - Public access: ✅ Enabled
+  - **Note**: React + Vite application (not Next.js). Serves static files via nginx. Replit integration is development-only.
 
 ## 🔧 Configuration
 
