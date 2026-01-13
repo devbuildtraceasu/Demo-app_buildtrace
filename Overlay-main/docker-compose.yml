@@ -92,8 +92,9 @@ services:
       PUBSUB_PROJECT_ID: local-dev
       VISION_TOPIC: vision
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-production}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-YOUR_GOOGLE_CLIENT_SECRET}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:5001/api/v1/auth/google/callback}
       CORS_ORIGINS: '["http://localhost:3000","http://localhost:5000"]'
       DEBUG: "true"
     healthcheck:

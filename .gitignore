@@ -1,2 +1,5 @@
 .env
+.env.*
+*.env
 Overlay-main/Untitled
+Build-TraceFlow/client/.env.production

@@ -13,11 +13,41 @@ class Settings(BaseSettings):
     debug: bool = False
     log_level: str = "INFO"
 
-    # CORS
-    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:5000"]
+    # CORS - can be JSON string or comma-separated
+    cors_origins: str = '["http://localhost:3000", "http://localhost:5000"]'
+    
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Parse CORS origins from JSON string or comma-separated string."""
+        import json
+        if not self.cors_origins:
+            return ["http://localhost:3000", "http://localhost:5000"]
+        try:
+            # Try parsing as JSON first
+            parsed = json.loads(self.cors_origins)
+            if isinstance(parsed, list):
+                return parsed
+            return [str(parsed)]
+        except (json.JSONDecodeError, TypeError):
+            # If not JSON, treat as comma-separated string
+            return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     # Database
     database_url: str = "postgresql://overlay:overlay_dev_password@localhost:5432/overlay_dev"
+    
+    # Cloud SQL components (for constructing DATABASE_URL in GCP)
+    db_user: str | None = None
+    db_password: str | None = None
+    db_name: str | None = None
+    cloud_sql_connection_name: str | None = None
+    
+    def get_database_url(self) -> str:
+        """Get database URL, constructing from components if in GCP environment."""
+        # If Cloud SQL components are provided, construct the connection string
+        if self.cloud_sql_connection_name and self.db_user and self.db_password and self.db_name:
+            return f"postgresql://{self.db_user}:{self.db_password}@/{self.db_name}?host=/cloudsql/{self.cloud_sql_connection_name}"
+        # Otherwise use the configured database_url
+        return self.database_url
 
     # Storage (GCS or S3-compatible)
     storage_backend: str = "s3"  # "s3" or "gcs"
@@ -36,6 +66,7 @@ class Settings(BaseSettings):
     # Auth
     google_client_id: str | None = None
     google_client_secret: str | None = None
+    google_redirect_uri: str | None = None  # Override redirect URI if set
     jwt_secret: str = "dev-secret-change-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expiration_hours: int = 24

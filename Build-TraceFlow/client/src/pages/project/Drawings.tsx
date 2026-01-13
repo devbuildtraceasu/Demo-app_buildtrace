@@ -31,14 +31,24 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { useParams, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import api from "@/lib/api";
+import { useDrawingStatus } from "@/hooks/use-drawings";
 
 export default function Drawings() {
   const params = useParams();
   const projectId = params?.id;
   const [viewMode, setViewMode] = useState<"grid" | "list">("list");
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerImage, setViewerImage] = useState<{ uri: string; title: string; description?: string } | null>(null);
 
   // Mock data for demo purposes
   const mockDrawingSets = [
@@ -115,14 +125,34 @@ export default function Drawings() {
     enabled: !!drawings && drawings.length > 0,
   });
 
-  // Combine mock and real drawing sets
+  // Fetch all blocks from API
+  const { data: allBlocks } = useQuery({
+    queryKey: ['project', projectId, 'all-blocks'],
+    queryFn: async () => {
+      if (!drawings || drawings.length === 0) return [];
+      // Fetch all blocks for each drawing
+      const blocksPromises = drawings.map(d => 
+        api.drawings.getBlocks(d.id).then(blocks => 
+          blocks.map(b => ({
+            ...b,
+            drawingId: d.id,
+            drawingName: d.name || d.filename,
+          }))
+        ).catch(() => [])
+      );
+      const results = await Promise.all(blocksPromises);
+      return results.flat();
+    },
+    enabled: !!drawings && drawings.length > 0,
+  });
+
+  // Combine mock and real drawing sets (status will be fetched per drawing in DrawingSetCard)
   const apiDrawingSets = drawings?.map(d => ({
     id: d.id,
     name: d.name || `Drawing ${d.id.slice(0, 8)}`,
     date: new Date(d.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-    sheets: 0,
+    drawing: d, // Store full drawing object for status fetching
     disciplines: ['Architectural'],
-    status: 'Complete',
   })) || [];
   const drawingSets = [...mockDrawingSets, ...apiDrawingSets];
 
@@ -221,6 +251,7 @@ export default function Drawings() {
             <TabsList>
               <TabsTrigger value="sets">Drawing Sets</TabsTrigger>
               <TabsTrigger value="sheets">All Sheets</TabsTrigger>
+              <TabsTrigger value="blocks">All Blocks</TabsTrigger>
             </TabsList>
             
             <div className="flex items-center gap-2">
@@ -253,74 +284,14 @@ export default function Drawings() {
             {viewMode === "grid" ? (
               <div className="grid md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {drawingSets.map((set) => (
-                  <Card key={set.id} className="cursor-pointer hover:border-primary/50 transition-all group">
-                    <CardHeader className="pb-3">
-                      <div className="flex items-start justify-between">
-                        <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                          <FolderOpen className="w-5 h-5 text-primary" />
-                        </div>
-                        <Badge variant={set.status === "Complete" ? "secondary" : "outline"} className="text-[10px]">
-                          {set.status}
-                        </Badge>
-                      </div>
-                      <CardTitle className="text-base mt-2">{set.name}</CardTitle>
-                      <CardDescription className="flex items-center gap-1 text-xs">
-                        <Calendar className="w-3 h-3" /> {set.date}
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent className="pt-0">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-muted-foreground">{set.sheets} sheets</span>
-                        <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
-                      </div>
-                      <div className="flex flex-wrap gap-1 mt-2">
-                        {set.disciplines.slice(0, 2).map((d) => (
-                          <Badge key={d} variant="outline" className="text-[9px] h-4 px-1">{d}</Badge>
-                        ))}
-                        {set.disciplines.length > 2 && (
-                          <Badge variant="outline" className="text-[9px] h-4 px-1">+{set.disciplines.length - 2}</Badge>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
+                  <DrawingSetCard key={set.id} set={set} projectId={projectId} />
                 ))}
               </div>
             ) : (
               <Card>
                 <div className="divide-y divide-border">
                   {drawingSets.map((set) => (
-                    <div key={set.id} className="p-4 flex items-center justify-between hover:bg-muted/30 cursor-pointer transition-colors">
-                      <div className="flex items-center gap-4">
-                        <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                          <FolderOpen className="w-5 h-5 text-primary" />
-                        </div>
-                        <div>
-                          <p className="font-medium">{set.name}</p>
-                          <p className="text-sm text-muted-foreground">{set.sheets} sheets • {set.date}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <div className="flex gap-1">
-                          {set.disciplines.slice(0, 3).map((d) => (
-                            <Badge key={d} variant="outline" className="text-[10px]">{d}</Badge>
-                          ))}
-                        </div>
-                        <Badge variant={set.status === "Complete" ? "secondary" : "outline"}>
-                          {set.status}
-                        </Badge>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8">
-                              <MoreVertical className="w-4 h-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem><Eye className="w-4 h-4 mr-2" /> View Sheets</DropdownMenuItem>
-                            <DropdownMenuItem><Download className="w-4 h-4 mr-2" /> Download All</DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-                    </div>
+                    <DrawingSetRow key={set.id} set={set} projectId={projectId} />
                   ))}
                 </div>
               </Card>
@@ -354,12 +325,17 @@ export default function Drawings() {
                       <div className="flex items-center gap-3">
                         <Badge variant="outline" className="text-[10px]">{sheet.discipline}</Badge>
                         {sheet.uri ? (
-                          <a href={sheet.uri} target="_blank" rel="noopener noreferrer">
-                            <Button variant="ghost" size="sm" className="h-7 gap-1">
-                              <Eye className="w-3 h-3" /> View
-                              <ExternalLink className="w-3 h-3 ml-1" />
-                            </Button>
-                          </a>
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className="h-7 gap-1"
+                            onClick={() => {
+                              setViewerImage({ uri: sheet.uri!, title: sheet.name, description: `${sheet.set} • ${sheet.date}` });
+                              setViewerOpen(true);
+                            }}
+                          >
+                            <Eye className="w-3 h-3" /> View
+                          </Button>
                         ) : (
                           <Link href={`/project/${projectId}/drawing/${sheet.drawingId}`}>
                             <Button variant="ghost" size="sm" className="h-7 gap-1">
@@ -374,8 +350,244 @@ export default function Drawings() {
               </div>
             </Card>
           </TabsContent>
+
+          <TabsContent value="blocks">
+            <Card>
+              <div className="divide-y divide-border">
+                {!allBlocks || allBlocks.length === 0 ? (
+                  <div className="p-8 text-center text-muted-foreground">
+                    <FileText className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                    <p>No blocks found. Upload drawings to see extracted blocks.</p>
+                  </div>
+                ) : (
+                  allBlocks.map((block) => (
+                    <div key={block.id} className="p-4 flex items-center justify-between hover:bg-muted/30 transition-colors">
+                      <div className="flex items-center gap-4">
+                        <div className="w-10 h-10 rounded-lg bg-muted flex items-center justify-center">
+                          <FileText className="w-5 h-5 text-muted-foreground" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium">{block.description || block.type || 'Block'}</span>
+                            {block.type && (
+                              <>
+                                <span className="text-sm text-muted-foreground">•</span>
+                                <Badge variant="outline" className="text-[10px]">{block.type}</Badge>
+                              </>
+                            )}
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            {block.drawingName || 'Unknown Drawing'} • {new Date(block.created_at).toLocaleDateString()}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        {block.uri ? (
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className="h-7 gap-1"
+                            onClick={() => {
+                              setViewerImage({ 
+                                uri: block.uri!, 
+                                title: block.description || block.type || 'Block',
+                                description: `${block.type || 'Block'} • ${block.drawingName || 'Unknown Drawing'}`
+                              });
+                              setViewerOpen(true);
+                            }}
+                          >
+                            <Eye className="w-3 h-3" /> View
+                          </Button>
+                        ) : (
+                          <Button variant="ghost" size="sm" className="h-7 gap-1" disabled>
+                            <Eye className="w-3 h-3" /> No Image
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </Card>
+          </TabsContent>
         </Tabs>
+        
+        {/* Image Viewer Modal */}
+        <Dialog open={viewerOpen} onOpenChange={setViewerOpen}>
+          <DialogContent className="max-w-4xl max-h-[90vh] overflow-auto">
+            <DialogHeader>
+              <DialogTitle>{viewerImage?.title}</DialogTitle>
+              {viewerImage?.description && (
+                <DialogDescription>{viewerImage.description}</DialogDescription>
+              )}
+            </DialogHeader>
+            {viewerImage && (
+              <div className="mt-4">
+                <img 
+                  src={viewerImage.uri} 
+                  alt={viewerImage.title}
+                  className="w-full h-auto rounded-lg border"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="%23f0f0f0"/><text x="50%25" y="50%25" text-anchor="middle" dy=".3em" fill="%23999">Image not available</text></svg>';
+                  }}
+                />
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     </DashboardLayout>
+  );
+}
+
+// Component for drawing set card with real-time status
+function DrawingSetCard({ set, projectId }: { set: any; projectId?: string }) {
+  const isMock = !set.drawing;
+  const { data: status, isLoading: statusLoading } = useDrawingStatus(isMock ? undefined : set.drawing?.id);
+  
+  const sheetCount = isMock ? set.sheets : (status?.sheet_count ?? 0);
+  const blockCount = isMock ? 0 : (status?.block_count ?? 0);
+  const processingStatus = isMock ? set.status : (status?.status || 'pending');
+  
+  const getStatusBadge = () => {
+    switch (processingStatus) {
+      case 'completed':
+        return { variant: 'secondary' as const, text: 'Complete' };
+      case 'processing':
+        return { variant: 'outline' as const, text: 'Processing' };
+      case 'failed':
+        return { variant: 'destructive' as const, text: 'Failed' };
+      default:
+        return { variant: 'outline' as const, text: 'Pending' };
+    }
+  };
+  
+  const statusBadge = getStatusBadge();
+  
+  const handleClick = () => {
+    if (!isMock && projectId) {
+      // Navigate to sheets tab filtered by this drawing, or expand inline
+      window.location.hash = `sheets-${set.id}`;
+    }
+  };
+  
+  return (
+    <Card 
+      className="cursor-pointer hover:border-primary/50 transition-all group"
+      onClick={handleClick}
+    >
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between">
+          <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+            {statusLoading || processingStatus === 'processing' ? (
+              <Loader2 className="w-5 h-5 text-primary animate-spin" />
+            ) : (
+              <FolderOpen className="w-5 h-5 text-primary" />
+            )}
+          </div>
+          <Badge variant={statusBadge.variant} className="text-[10px]">
+            {statusBadge.text}
+          </Badge>
+        </div>
+        <CardTitle className="text-base mt-2">{set.name}</CardTitle>
+        <CardDescription className="flex items-center gap-1 text-xs">
+          <Calendar className="w-3 h-3" /> {set.date}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-muted-foreground">
+            {sheetCount} {sheetCount === 1 ? 'sheet' : 'sheets'}
+            {!isMock && blockCount > 0 && ` • ${blockCount} blocks`}
+          </span>
+          <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
+        </div>
+        <div className="flex flex-wrap gap-1 mt-2">
+          {set.disciplines.slice(0, 2).map((d: string) => (
+            <Badge key={d} variant="outline" className="text-[9px] h-4 px-1">{d}</Badge>
+          ))}
+          {set.disciplines.length > 2 && (
+            <Badge variant="outline" className="text-[9px] h-4 px-1">+{set.disciplines.length - 2}</Badge>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Component for drawing set row in list view
+function DrawingSetRow({ set, projectId }: { set: any; projectId?: string }) {
+  const isMock = !set.drawing;
+  const { data: status, isLoading: statusLoading } = useDrawingStatus(isMock ? undefined : set.drawing?.id);
+  
+  const sheetCount = isMock ? set.sheets : (status?.sheet_count ?? 0);
+  const blockCount = isMock ? 0 : (status?.block_count ?? 0);
+  const processingStatus = isMock ? set.status : (status?.status || 'pending');
+  
+  const getStatusBadge = () => {
+    switch (processingStatus) {
+      case 'completed':
+        return { variant: 'secondary' as const, text: 'Complete' };
+      case 'processing':
+        return { variant: 'outline' as const, text: 'Processing' };
+      case 'failed':
+        return { variant: 'destructive' as const, text: 'Failed' };
+      default:
+        return { variant: 'outline' as const, text: 'Pending' };
+    }
+  };
+  
+  const statusBadge = getStatusBadge();
+  
+  const handleClick = () => {
+    if (!isMock && projectId) {
+      window.location.hash = `sheets-${set.id}`;
+    }
+  };
+  
+  return (
+    <div 
+      className="p-4 flex items-center justify-between hover:bg-muted/30 cursor-pointer transition-colors"
+      onClick={handleClick}
+    >
+      <div className="flex items-center gap-4">
+        <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+          {statusLoading || processingStatus === 'processing' ? (
+            <Loader2 className="w-5 h-5 text-primary animate-spin" />
+          ) : (
+            <FolderOpen className="w-5 h-5 text-primary" />
+          )}
+        </div>
+        <div>
+          <p className="font-medium">{set.name}</p>
+          <p className="text-sm text-muted-foreground">
+            {sheetCount} {sheetCount === 1 ? 'sheet' : 'sheets'}
+            {!isMock && blockCount > 0 && ` • ${blockCount} blocks`}
+            {` • ${set.date}`}
+          </p>
+        </div>
+      </div>
+      <div className="flex items-center gap-3">
+        <div className="flex gap-1">
+          {set.disciplines.slice(0, 3).map((d: string) => (
+            <Badge key={d} variant="outline" className="text-[10px]">{d}</Badge>
+          ))}
+        </div>
+        <Badge variant={statusBadge.variant}>
+          {statusBadge.text}
+        </Badge>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+            <Button variant="ghost" size="icon" className="h-8 w-8">
+              <MoreVertical className="w-4 h-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem><Eye className="w-4 h-4 mr-2" /> View Sheets</DropdownMenuItem>
+            <DropdownMenuItem><Download className="w-4 h-4 mr-2" /> Download All</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </div>
   );
 }

@@ -42,7 +42,7 @@ app = FastAPI(
 # CORS middleware for frontend access
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -57,6 +57,7 @@ app.include_router(uploads.router, prefix="/api/uploads", tags=["Uploads"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["Jobs"])
 app.include_router(alignment.router, prefix="/api/alignment", tags=["Alignment"])
 app.include_router(google_auth.router, prefix="/api/auth", tags=["Google OAuth"])
+app.include_router(google_auth.router, prefix="/api/v1/auth", tags=["Google OAuth"])
 app.include_router(analysis.router, prefix="/api/analysis", tags=["AI Analysis"])
 
 

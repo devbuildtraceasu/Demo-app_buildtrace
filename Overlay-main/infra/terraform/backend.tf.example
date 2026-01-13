@@ -1,0 +1,13 @@
+# Terraform Backend Configuration
+# Copy this to backend.tf and update with your bucket name
+
+terraform {
+  backend "gcs" {
+    bucket = "buildtrace-terraform-state"  # Update if you used a different name
+    prefix = "terraform/state"
+  }
+}
+
+# Note: If you can't create the bucket, you can comment out the backend block
+# and Terraform will use local state (stored in terraform.tfstate file)
+# This is NOT recommended for production but works for testing

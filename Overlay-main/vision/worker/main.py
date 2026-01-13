@@ -3,10 +3,12 @@
 import inspect
 import json
 import logging
+import os
 import signal
 import sys
 import threading
 import time
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from google.cloud.pubsub_v1.types import FlowControl
 from sqlmodel import select
@@ -38,6 +40,40 @@ logger = logging.getLogger(__name__)
 
 # Global flag for graceful shutdown
 shutdown_flag = False
+worker_healthy = False  # Set to True once worker is ready
+
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    """Simple HTTP handler for Cloud Run health checks."""
+    
+    def do_GET(self):
+        """Handle GET requests for health checks."""
+        if self.path == "/health" or self.path == "/":
+            if worker_healthy:
+                self.send_response(200)
+                self.send_header("Content-type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"OK")
+            else:
+                self.send_response(503)
+                self.send_header("Content-type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"Not Ready")
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def log_message(self, format, *args):
+        """Suppress default logging to avoid noise."""
+        pass
+
+
+def start_health_server():
+    """Start HTTP server for Cloud Run health checks."""
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    logger.info(f"[health.server] listening on port {port}")
+    server.serve_forever()
 
 
 def signal_handler(signum, frame):
@@ -57,7 +93,26 @@ def validate_database_connectivity() -> bool:
     Raises:
         Exception: If database connection fails
     """
+    import os
+    
     try:
+        # If using Cloud SQL Unix socket, verify the socket path exists
+        if config.db_host and config.db_host.startswith("/cloudsql/"):
+            socket_path = config.db_host
+            if not os.path.exists(socket_path):
+                logger.warning(f"[db.socket.missing] Unix socket path does not exist: {socket_path}")
+                logger.warning("[db.socket.missing] This might indicate Cloud SQL proxy is not running")
+                logger.warning("[db.socket.missing] Waiting 5 seconds for Cloud SQL proxy to initialize...")
+                import time
+                time.sleep(5)
+                if not os.path.exists(socket_path):
+                    raise ConnectionError(
+                        f"Cloud SQL Unix socket not found at {socket_path}. "
+                        "Ensure Cloud SQL proxy is running and the volume is mounted correctly."
+                    )
+            else:
+                logger.info(f"[db.socket.found] Unix socket exists: {socket_path}")
+        
         get_engine()  # Verify engine can be created
 
         # Try to connect and query tables
@@ -142,13 +197,21 @@ def connect_with_retry(connection_func, max_retries: int = 3, base_delay: float 
 
 def main():
     """Main worker entrypoint."""
-    global shutdown_flag
+    global shutdown_flag, worker_healthy
 
     # Register signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
     log_worker_starting(logger)
+
+    # Start health check server in background thread (for Cloud Run)
+    health_thread = threading.Thread(
+        target=start_health_server,
+        name="HealthServer",
+        daemon=True,
+    )
+    health_thread.start()
 
     try:
         topics = [config.vision_topic]
@@ -205,6 +268,7 @@ def main():
         )
 
         log_worker_ready(logger)
+        worker_healthy = True  # Mark as healthy for Cloud Run health checks
 
         from jobs.runner import JobRunner
 

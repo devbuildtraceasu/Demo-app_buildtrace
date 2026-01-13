@@ -47,3 +47,16 @@ variable "worker_image_tag" {
   default     = "latest"
 }
 
+variable "openai_api_key" {
+  description = "OpenAI API Key"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "gemini_api_key" {
+  description = "Google Gemini API Key"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
