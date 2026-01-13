@@ -173,9 +173,21 @@ async def google_callback(
     # Redirect to frontend with token
     # Use cors_origins_list (property that parses the string) not cors_origins (raw string)
     cors_list = settings.cors_origins_list
-    frontend_url = cors_list[0] if cors_list else "http://localhost:3000"
+    
+    # Prefer production frontend URL (HTTPS) over localhost
+    frontend_url = None
+    for origin in cors_list:
+        if origin.startswith("https://") and "buildtrace-frontend" in origin:
+            frontend_url = origin
+            break
+    
+    # Fallback to first CORS origin, then localhost
+    if not frontend_url:
+        frontend_url = cors_list[0] if cors_list else "http://localhost:3000"
+    
+    # Use /dashboard instead of /auth for better UX
     return RedirectResponse(
-        url=f"{frontend_url}/auth?token={jwt_token}",
+        url=f"{frontend_url}/dashboard?token={jwt_token}",
         status_code=status.HTTP_302_FOUND,
     )
 
