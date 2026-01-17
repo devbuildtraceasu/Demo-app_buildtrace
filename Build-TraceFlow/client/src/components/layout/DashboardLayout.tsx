@@ -1,12 +1,12 @@
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
-import { 
-  LayoutDashboard, 
-  Layers, 
-  FileDiff, 
-  BarChart3, 
-  Settings, 
-  Bell, 
+import {
+  LayoutDashboard,
+  Layers,
+  FileDiff,
+  BarChart3,
+  Settings,
+  Bell,
   Search,
   ChevronDown,
   LogOut,
@@ -18,7 +18,10 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   ChevronRight,
-  FileText
+  FileText,
+  MoreHorizontal,
+  Eye,
+  Trash2
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -32,9 +35,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import logo from "@assets/BuildTrace_Logo_1767832159404.jpg";
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useMemo } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
 
 interface DashboardLayoutProps {
   children: React.ReactNode;
@@ -45,21 +49,39 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [comparisonsExpanded, setComparisonsExpanded] = useState(true);
   const [analysisExpanded, setAnalysisExpanded] = useState(true);
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const isProjectRoute = location.includes("/project/");
   const projectId = isProjectRoute ? location.split("/")[2] : null;
 
-  // Mock data for demo purposes
+  // Delete comparison mutation
+  const deleteComparisonMutation = useMutation({
+    mutationFn: (comparisonId: string) => api.comparisons.delete(comparisonId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project', projectId, 'comparisons'] });
+      toast({
+        title: "Comparison deleted",
+        description: "The comparison has been removed.",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Delete failed",
+        description: "Failed to delete the comparison.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleDeleteComparison = (comparisonId: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    deleteComparisonMutation.mutate(comparisonId);
+  };
+
+  // Mock data for demo purposes (only project name fallback)
   const mockProjectName = "Memorial Hospital Expansion";
-  const mockComparisons = [
-    { id: "c1", name: "IFC vs Bulletin 01", date: "Jan 20", isProcessed: true },
-    { id: "c2", name: "Bulletin 01 vs 02", date: "Feb 01", isProcessed: true },
-    { id: "c3", name: "Bulletin 02 vs 03", date: "Feb 15", isProcessed: true },
-  ];
-  const mockAnalyses = [
-    { id: "a1", comparisonId: "c1", name: "IFC vs Bulletin 01", date: "Jan 21" },
-    { id: "a2", comparisonId: "c2", name: "Bulletin 01 vs 02", date: "Feb 02" },
-  ];
 
   // Fetch actual project data
   const { data: project } = useQuery({
@@ -82,83 +104,140 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     enabled: !!projectId,
   });
 
-  // Fetch block details for comparisons to get readable names
-  const { data: comparisonBlocks } = useQuery({
-    queryKey: ['project', projectId, 'comparison-blocks', comparisonsData?.map(c => `${c.sheet_a_id}-${c.sheet_b_id}`).join(',')],
-    queryFn: async () => {
-      if (!comparisonsData || comparisonsData.length === 0) return {};
-      
-      // Get all unique block IDs
-      const blockIds = new Set<string>();
-      comparisonsData.forEach(c => {
-        if (c.sheet_a_id) blockIds.add(c.sheet_a_id);
-        if (c.sheet_b_id) blockIds.add(c.sheet_b_id);
-      });
-      
-      // Fetch all blocks for the project and create a map
-      const allBlocks: Record<string, { description?: string; type?: string }> = {};
-      
-      try {
-        // Fetch blocks from all drawings in the project
-        if (projectId && drawings) {
-          const blocksPromises = drawings.map(d => 
-            api.drawings.getBlocks(d.id).catch(() => [])
-          );
-          const blocksArrays = await Promise.all(blocksPromises);
-          const allBlocksList = blocksArrays.flat();
-          
-          allBlocksList.forEach(block => {
-            allBlocks[block.id] = {
-              description: block.description,
-              type: block.type || undefined,
-            };
-          });
-        }
-      } catch (error) {
-        console.error('Error fetching blocks for comparisons:', error);
-      }
-      
-      return allBlocks;
-    },
-    enabled: !!comparisonsData && comparisonsData.length > 0 && !!projectId,
+  // Fetch all blocks to get sheet IDs for comparisons
+  // Note: The API incorrectly returns block_a_id as drawing_a_id and block_b_id as drawing_b_id
+  const { data: allBlocks, isLoading: blocksLoading } = useQuery({
+    queryKey: ['all-blocks-for-comparisons'],
+    queryFn: () => api.blocks.listAll(),
+    enabled: !!projectId && !!comparisonsData && comparisonsData.length > 0,
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
   });
+
+  // Fetch all sheets to get sheet names
+  const { data: allSheets, isLoading: sheetsLoading } = useQuery({
+    queryKey: ['all-sheets-for-comparisons', projectId],
+    queryFn: async () => {
+      if (!drawings || drawings.length === 0) return [];
+      const sheetsPromises = drawings.map(d => 
+        api.drawings.getSheets(d.id).catch(() => [])
+      );
+      const sheetsArrays = await Promise.all(sheetsPromises);
+      return sheetsArrays.flat();
+    },
+    enabled: !!projectId && !!drawings && drawings.length > 0 && !!comparisonsData && comparisonsData.length > 0,
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+  });
+  
+  // Create a map of sheet IDs to sheet info
+  const sheetMap = useMemo(() => {
+    if (!allSheets) return {};
+    const map: Record<string, { sheet_number?: string; title?: string; name?: string }> = {};
+    allSheets.forEach(sheet => {
+      map[sheet.id] = {
+        sheet_number: sheet.sheet_number,
+        title: sheet.title,
+        name: sheet.sheet_number || sheet.title || 'Sheet',
+      };
+    });
+    console.log('[DashboardLayout] Sheet map created:', Object.keys(map).length, 'sheets');
+    return map;
+  }, [allSheets]);
+
+  // Create a map of block IDs to sheet info
+  const comparisonBlocks = useMemo(() => {
+    if (!allBlocks) {
+      console.log('[DashboardLayout] No blocks available');
+      return {};
+    }
+    if (!sheetMap || Object.keys(sheetMap).length === 0) {
+      console.log('[DashboardLayout] No sheets available yet, blocks will have default names');
+    }
+    const blockMap: Record<string, { sheet_id?: string; sheetName?: string }> = {};
+    allBlocks.forEach(block => {
+      const sheetInfo = block.sheet_id ? sheetMap[block.sheet_id] : null;
+      const sheetName = sheetInfo?.name || sheetInfo?.sheet_number || sheetInfo?.title || 'Sheet';
+      blockMap[block.id] = {
+        sheet_id: block.sheet_id,
+        sheetName: sheetName,
+      };
+    });
+    console.log('[DashboardLayout] Block map created:', Object.keys(blockMap).length, 'blocks');
+    console.log('[DashboardLayout] Sheet map size:', Object.keys(sheetMap).length, 'sheets');
+    console.log('[DashboardLayout] Sample block mapping:', Object.entries(blockMap).slice(0, 2).map(([id, info]) => ({ id: id.slice(0, 12), sheetName: info.sheetName })));
+    return blockMap;
+  }, [allBlocks, sheetMap]);
 
   // Use real project name if available, otherwise fall back to mock
   const projectName = project?.name || mockProjectName;
   
-  // Format comparison names with block descriptions
-  const formatComparisonName = (c: any) => {
-    if (!comparisonBlocks) {
-      return `Comparison #${c.id.slice(0, 6)}`;
-    }
+  // Use only real comparisons from database, sorted by most recent first
+  const comparisons = useMemo(() => {
+    if (!comparisonsData || comparisonsData.length === 0) return [];
     
-    const blockA = c.sheet_a_id ? comparisonBlocks[c.sheet_a_id] : null;
-    const blockB = c.sheet_b_id ? comparisonBlocks[c.sheet_b_id] : null;
+    // Format comparison names with sheet names (e.g., "A-113 old vs A-113 new")
+    // Note: drawing_a_id and drawing_b_id are actually block IDs (API bug)
+    const formatComparisonName = (c: any) => {
+      // If blocks or sheets are still loading, show a temporary name
+      if (blocksLoading || sheetsLoading) {
+        return `Loading... #${c.id.slice(0, 8)}`;
+      }
+      
+      if (!comparisonBlocks || Object.keys(comparisonBlocks).length === 0) {
+        // If no blocks found, try to use block IDs directly
+        return `Sheet ${c.drawing_a_id?.slice(0, 8) || 'A'} vs Sheet ${c.drawing_b_id?.slice(0, 8) || 'B'}`;
+      }
+      
+      // Use drawing_a_id and drawing_b_id as block IDs (they're actually block IDs, not drawing IDs)
+      const blockA = c.drawing_a_id ? comparisonBlocks[c.drawing_a_id] : null;
+      const blockB = c.drawing_b_id ? comparisonBlocks[c.drawing_b_id] : null;
+      
+      console.log('[DashboardLayout] Formatting comparison:', c.id.slice(0, 8), {
+        blockA_id: c.drawing_a_id?.slice(0, 12),
+        blockB_id: c.drawing_b_id?.slice(0, 12),
+        blockA: blockA,
+        blockB: blockB,
+      });
+      
+      if (blockA && blockB) {
+        const sheetNameA = blockA.sheetName || 'Sheet A';
+        const sheetNameB = blockB.sheetName || 'Sheet B';
+        // Format as "Sheet name old vs Sheet name new"
+        const result = `${sheetNameA} old vs ${sheetNameB} new`;
+        console.log('[DashboardLayout] Formatted name:', result);
+        return result;
+      } else if (blockA) {
+        const sheetNameA = blockA.sheetName || 'Sheet A';
+        return `${sheetNameA} old vs Sheet B new`;
+      } else if (blockB) {
+        const sheetNameB = blockB.sheetName || 'Sheet B';
+        return `Sheet A old vs ${sheetNameB} new`;
+      }
+      
+      // Fallback: use block IDs
+      return `Sheet ${c.drawing_a_id?.slice(0, 8) || 'A'} vs Sheet ${c.drawing_b_id?.slice(0, 8) || 'B'}`;
+    };
     
-    if (blockA && blockB) {
-      const nameA = blockA.description || blockA.type || 'Block A';
-      const nameB = blockB.description || blockB.type || 'Block B';
-      return `${nameA} vs ${nameB}`;
-    } else if (blockA) {
-      const nameA = blockA.description || blockA.type || 'Block A';
-      return `${nameA} vs Block B`;
-    } else if (blockB) {
-      const nameB = blockB.description || blockB.type || 'Block B';
-      return `Block A vs ${nameB}`;
-    }
-    
-    return `Comparison #${c.id.slice(0, 6)}`;
-  };
+    return comparisonsData
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .map(c => ({
+        id: c.id,
+        name: formatComparisonName(c),
+        date: new Date(c.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        isProcessed: c.status === 'completed',
+      }));
+  }, [comparisonsData, comparisonBlocks, blocksLoading, sheetsLoading]);
   
-  // Combine mock and real comparisons
-  const apiComparisons = comparisonsData?.slice(0, 5).map(c => ({
-    id: c.id,
-    name: formatComparisonName(c),
-    date: new Date(c.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    isProcessed: c.status === 'completed',
-  })) || [];
-  const comparisons = [...mockComparisons, ...apiComparisons];
-  const analyses = mockAnalyses;
+  // Use only real analyses (completed comparisons)
+  const analyses = useMemo(() => {
+    return comparisons
+      .filter(c => c.isProcessed)
+      .map(c => ({
+        id: c.id,
+        comparisonId: c.id,
+        name: c.name,
+        date: c.date,
+      }));
+  }, [comparisons]);
 
   return (
     <div className="min-h-screen bg-background flex">
@@ -209,11 +288,6 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                     <BarChart3 className="w-4 h-4" />
                   </Button>
                 </Link>
-                <Link href={`/project/${projectId}/drawings`}>
-                  <Button variant={location.includes('/drawings') ? "secondary" : "ghost"} size="icon" className="h-10 w-10">
-                    <Layers className="w-4 h-4" />
-                  </Button>
-                </Link>
               </>
             )}
           </div>
@@ -256,14 +330,42 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                           <span>+ New Comparison</span>
                         </div>
                       </Link>
-                      {comparisons.map((c) => (
-                        <Link key={c.id} href={`/project/${projectId}/overlay`}>
-                          <div className={`px-3 py-1.5 text-xs rounded-md cursor-pointer flex items-center justify-between hover:bg-sidebar-accent/50 ${location.includes('/overlay') ? 'bg-sidebar-accent text-foreground' : 'text-muted-foreground'}`}>
-                            <span className="truncate">{c.name}</span>
-                            <span className="text-[10px] text-muted-foreground/60">{c.date}</span>
+                      {comparisons.length === 0 ? (
+                        <div className="px-3 py-1.5 text-xs text-muted-foreground/60 italic">
+                          No comparisons yet
+                        </div>
+                      ) : (
+                        comparisons.map((c) => (
+                          <div key={c.id} className={`group flex items-center justify-between py-1.5 pl-3 pr-1 text-xs rounded-md hover:bg-sidebar-accent/50 ${location.includes(`/overlay/${c.id}`) ? 'bg-sidebar-accent text-foreground' : 'text-muted-foreground'}`}>
+                            <Link href={`/project/${projectId}/overlay/${c.id}`} className="flex-1 truncate cursor-pointer">
+                              <span className="truncate">{c.name}</span>
+                            </Link>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-5 w-5 opacity-0 group-hover:opacity-100 shrink-0"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <MoreHorizontal className="w-3 h-3" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="w-32">
+                                <DropdownMenuItem onClick={() => setLocation(`/project/${projectId}/overlay/${c.id}`)}>
+                                  <Eye className="w-3 h-3 mr-2" /> View
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={(e) => handleDeleteComparison(c.id, e)}
+                                  className="text-destructive focus:text-destructive"
+                                >
+                                  <Trash2 className="w-3 h-3 mr-2" /> Delete
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           </div>
-                        </Link>
-                      ))}
+                        ))
+                      )}
                     </CollapsibleContent>
                   </Collapsible>
 
@@ -298,9 +400,6 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                     </CollapsibleContent>
                   </Collapsible>
 
-                  <SidebarItem href={`/project/${projectId}/drawings`} icon={<Layers className="w-4 h-4" />} active={location.includes('/drawings')}>
-                    Drawings
-                  </SidebarItem>
                 </div>
               </div>
             )}

@@ -44,7 +44,9 @@ echo "Step 4: Deploying to Cloud Run..."
 gcloud run services update ${SERVICE_NAME} \
   --region=${REGION} \
   --project=${PROJECT_ID} \
-  --image=${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/api:latest
+  --image=${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/api:latest \
+  --timeout=600 \
+  --max-instances=10
 
 echo ""
 echo "============================================"

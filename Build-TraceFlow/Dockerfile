@@ -31,16 +31,16 @@ COPY --from=builder /app/dist/public /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Verify files exist (fail fast if build failed)
+# Note: nginx -t is skipped because upstream "api" isn't resolvable at build time
 RUN test -f /usr/share/nginx/html/index.html || (echo "ERROR: index.html not found in build output" && exit 1) && \
-    test -f /etc/nginx/conf.d/default.conf || (echo "ERROR: nginx.conf not found" && exit 1) && \
-    nginx -t || (echo "ERROR: nginx configuration test failed" && exit 1)
+    test -f /etc/nginx/conf.d/default.conf || (echo "ERROR: nginx.conf not found" && exit 1)
 
-# Expose port 8080 (Cloud Run default)
+# Expose port 8080
 EXPOSE 8080
 
-# Health check
+# Health check using the /health endpoint
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD wget --quiet --tries=1 --spider http://localhost:8080/ || exit 1
+  CMD wget --quiet --tries=1 --spider http://localhost:8080/health || exit 1
 
 # Start nginx
 CMD ["nginx", "-g", "daemon off;"]

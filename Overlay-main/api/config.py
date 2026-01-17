@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     google_client_id: str | None = None
     google_client_secret: str | None = None
     google_redirect_uri: str | None = None  # Override redirect URI if set
+    frontend_url: str = "http://localhost:3000"  # Frontend URL for password reset links
     jwt_secret: str = "dev-secret-change-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expiration_hours: int = 24

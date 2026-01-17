@@ -228,12 +228,13 @@ async def create_comparison(
     session.commit()
     
     # Worker expects: { "type": "...", "id": "...", "payload": {...} }
+    # Note: Worker expects snake_case field names (block_a_id, block_b_id)
     job_payload = {
         "type": "vision.block.overlay.generate",
         "id": job_id,
         "payload": {
-            "blockAId": block_a_id,
-            "blockBId": block_b_id,
+            "block_a_id": block_a_id,
+            "block_b_id": block_b_id,
         },
     }
 
@@ -498,4 +499,152 @@ async def delete_change(change_id: str, session: SessionDep, user: CurrentUser):
     session.commit()
 
     return None
+
+
+@router.delete("/{comparison_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_comparison(comparison_id: str, session: SessionDep, user: OptionalUser = None):
+    """Soft delete a comparison (overlay)."""
+    overlay = session.get(Overlay, comparison_id)
+
+    if not overlay or overlay.deleted_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Comparison not found",
+        )
+
+    overlay.deleted_at = datetime.now(timezone.utc)
+    overlay.updated_at = datetime.now(timezone.utc)
+    session.add(overlay)
+    session.commit()
+
+    return None
+
+
+# Public comparison schema
+class PublicComparisonRequest(SQLModel):
+    """Request schema for public comparison."""
+    old_uri: str
+    new_uri: str
+
+
+@router.post("/public/compare", response_model=ComparisonResponse, status_code=status.HTTP_201_CREATED)
+async def public_comparison(
+    request: PublicComparisonRequest,
+    session: SessionDep,
+):
+    """Create a public comparison for Try a Project feature. No authentication required.
+    Creates temporary blocks from URIs and runs the comparison.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # Create a temporary sheet for public comparisons
+    from api.routes.drawings import Block, Sheet
+
+    # Generate IDs
+    temp_sheet_id = generate_cuid()
+    block_a_id = generate_cuid()
+    block_b_id = generate_cuid()
+    overlay_id = generate_cuid()
+
+    # Create temporary sheet (for organizing public blocks)
+    temp_sheet = Sheet(
+        id=temp_sheet_id,
+        drawing_id="public",  # Special marker for public uploads
+        index=0,
+        uri="",
+    )
+    session.add(temp_sheet)
+
+    # Create block A (old drawing)
+    block_a = Block(
+        id=block_a_id,
+        sheet_id=temp_sheet_id,
+        type="Plan",
+        uri=request.old_uri,
+    )
+    session.add(block_a)
+
+    # Create block B (new drawing)
+    block_b = Block(
+        id=block_b_id,
+        sheet_id=temp_sheet_id,
+        type="Plan",
+        uri=request.new_uri,
+    )
+    session.add(block_b)
+    session.commit()
+
+    logger.info(f"[PUBLIC] Created blocks: old={block_a_id}, new={block_b_id}")
+
+    # Create overlay record
+    overlay = Overlay(
+        id=overlay_id,
+        block_a_id=block_a_id,
+        block_b_id=block_b_id,
+    )
+    session.add(overlay)
+    session.commit()
+
+    # Create job for overlay generation
+    job_id = generate_cuid()
+    from api.routes.jobs import Job as JobModel
+    job = JobModel(
+        id=job_id,
+        project_id=None,  # No project for public comparisons
+        target_type="overlay",
+        target_id=overlay_id,
+        type="vision.block.overlay.generate",
+        status="Queued",
+        payload={
+            "block_a_id": block_a_id,
+            "block_b_id": block_b_id,
+        },
+    )
+    session.add(job)
+    session.commit()
+
+    # Update overlay with job_id
+    overlay.job_id = job_id
+    session.commit()
+
+    # Publish to Pub/Sub
+    # Note: Worker expects snake_case field names (block_a_id, block_b_id)
+    job_payload = {
+        "type": "vision.block.overlay.generate",
+        "id": job_id,
+        "payload": {
+            "block_a_id": block_a_id,
+            "block_b_id": block_b_id,
+        },
+    }
+
+    try:
+        print(f"[PUBLIC COMPARISON] Publishing job {job_id} to Pub/Sub...", flush=True)
+        pubsub = get_pubsub_client()
+        topic_path = pubsub.topic_path(settings.pubsub_project_id, settings.vision_topic)
+        future = pubsub.publish(
+            topic_path,
+            json.dumps(job_payload).encode("utf-8"),
+            type="vision.block.overlay.generate",
+            id=job_id,
+        )
+        message_id = future.result(timeout=10.0)
+        print(f"[PUBLIC COMPARISON] Successfully published job {job_id}, message_id={message_id}", flush=True)
+    except Exception as e:
+        print(f"[PUBLIC COMPARISON] ERROR: Failed to publish job {job_id}: {e}", flush=True)
+        logger.error(f"Failed to publish public comparison job {job_id}: {e}", exc_info=True)
+        job.status = "Failed"
+        session.add(job)
+        session.commit()
+
+    return ComparisonResponse(
+        id=overlay.id,
+        project_id="public",
+        drawing_a_id=block_a_id,
+        drawing_b_id=block_b_id,
+        status="processing",
+        created_at=overlay.created_at,
+        updated_at=overlay.updated_at,
+    )
 

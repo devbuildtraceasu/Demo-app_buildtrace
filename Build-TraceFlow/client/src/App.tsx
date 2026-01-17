@@ -8,6 +8,8 @@ import NotFound from "@/pages/not-found";
 
 import Landing from "@/pages/Landing";
 import AuthPage from "@/pages/auth/AuthPage";
+import ForgotPasswordPage from "@/pages/auth/ForgotPasswordPage";
+import ResetPasswordPage from "@/pages/auth/ResetPasswordPage";
 import ProjectSetup from "@/pages/onboarding/ProjectSetup";
 import ProjectList from "@/pages/dashboard/ProjectList";
 import ProjectDashboard from "@/pages/project/ProjectDashboard";
@@ -19,12 +21,16 @@ import Settings from "@/pages/settings/Settings";
 import CreditsPage from "@/pages/settings/CreditsPage";
 import ProfilePage from "@/pages/profile/ProfilePage";
 import GodMode from "@/pages/admin/GodMode";
+import TryCompare from "@/pages/public/TryCompare";
 
 function Router() {
   return (
     <Switch>
       <Route path="/" component={Landing} />
+      <Route path="/try-compare" component={TryCompare} />
       <Route path="/auth" component={AuthPage} />
+      <Route path="/forgot-password" component={ForgotPasswordPage} />
+      <Route path="/reset-password" component={ResetPasswordPage} />
       <Route path="/onboarding" component={ProjectSetup} />
       
       {/* Dashboard Routes */}
@@ -36,6 +42,7 @@ function Router() {
       {/* Project Routes */}
       <Route path="/project/:id" component={ProjectDashboard} />
       <Route path="/project/:id/new-overlay" component={NewOverlay} />
+      <Route path="/project/:id/overlay/:comparisonId" component={OverlayViewer} />
       <Route path="/project/:id/overlay" component={OverlayViewer} />
       <Route path="/project/:id/cost" component={CostSchedule} />
       <Route path="/project/:id/drawings" component={Drawings} />

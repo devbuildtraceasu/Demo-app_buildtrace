@@ -37,3 +37,16 @@ class TokenResponse(BaseModel):
     expires_in: int
     user: UserResponse
 
+
+class ForgotPasswordRequest(BaseModel):
+    """Forgot password request."""
+
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    """Reset password request."""
+
+    token: str
+    new_password: str
+

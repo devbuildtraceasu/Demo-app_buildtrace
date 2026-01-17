@@ -180,7 +180,36 @@ export default function ProjectSetup() {
       const success = await handleCreateProject();
       if (!success) return;
     }
-    
+
+    if (step === 2) {
+      // Save team details before moving to Step 3
+      if (projectId) {
+        try {
+          await api.projects.update(projectId, {
+            owner: ownerClient || undefined,
+            contractor: generalContractor || undefined,
+            architect: architect || undefined,
+            project_manager: projectManager || undefined,
+            contract_value: contractValue || undefined,
+            target_completion: targetCompletion || undefined,
+          });
+
+          toast({
+            title: "Team details saved",
+            description: "Project team information has been saved successfully.",
+          });
+        } catch (error) {
+          console.error('Error saving team details:', error);
+          toast({
+            title: "Error saving team details",
+            description: error instanceof Error ? error.message : "Failed to save team details",
+            variant: "destructive",
+          });
+          return; // Don't proceed if save fails
+        }
+      }
+    }
+
     if (step < totalSteps) {
       setStep(step + 1);
     } else {

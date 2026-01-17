@@ -30,6 +30,8 @@ class User(SQLModel, table=True):
     last_name: str | None = None
     profile_image_url: str | None = None
     organization_id: str | None = None  # Link to organization
+    password_reset_token: str | None = None
+    password_reset_expires: datetime | None = None
 
 
 class Organization(SQLModel, table=True):
@@ -42,3 +44,4 @@ class Organization(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     deleted_at: datetime | None = None
     name: str
+    slug: str | None = None  # Legacy field from old schema

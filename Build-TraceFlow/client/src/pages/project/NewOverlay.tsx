@@ -24,7 +24,8 @@ import {
   X,
   RefreshCw
 } from "lucide-react";
-import { useDrawings, useBlocks, useDrawingStatus } from "@/hooks/use-drawings";
+import { useDrawings, useBlocks, useDrawingStatus, useDrawingsDescending, useSheetsDescending, useBlocksBySheet } from "@/hooks/use-drawings";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useCreateComparison } from "@/hooks/use-comparison";
 import { useCreateDrawingWithUpload } from "@/hooks/use-upload";
 import { useToast } from "@/hooks/use-toast";
@@ -69,6 +70,12 @@ export default function NewOverlay() {
   const [overlayMode, setOverlayMode] = useState<"auto" | "manual">("auto");
   const [selectedSourceBlock, setSelectedSourceBlock] = useState<string | null>(null);
   const [selectedTargetBlock, setSelectedTargetBlock] = useState<string | null>(null);
+
+  // Hierarchical selection state for "existing" mode
+  const [selectedSourceDrawingId, setSelectedSourceDrawingId] = useState<string | null>(null);
+  const [selectedSourceSheetId, setSelectedSourceSheetId] = useState<string | null>(null);
+  const [selectedTargetDrawingId, setSelectedTargetDrawingId] = useState<string | null>(null);
+  const [selectedTargetSheetId, setSelectedTargetSheetId] = useState<string | null>(null);
 
   // Uploaded drawing IDs - initialized from URL params
   const [uploadedSourceDrawingId, setUploadedSourceDrawingIdState] = useState<string | null>(initialSourceDrawing);
@@ -115,7 +122,16 @@ export default function NewOverlay() {
   const { data: drawings, isLoading: drawingsLoading } = useDrawings(projectId);
   const { data: allBlocks, isLoading: blocksLoading, refetch: refetchBlocks } = useBlocks("Plan");
   const createComparison = useCreateComparison();
-  const createDrawingWithUpload = useCreateDrawingWithUpload();
+  // Use separate mutation instances to avoid race conditions
+  const createSourceDrawingWithUpload = useCreateDrawingWithUpload();
+  const createTargetDrawingWithUpload = useCreateDrawingWithUpload();
+
+  // Hierarchical selection hooks (for "existing" mode)
+  const { data: drawingsDescending } = useDrawingsDescending(projectId);
+  const { data: sourceSheetsDescending } = useSheetsDescending(selectedSourceDrawingId || undefined);
+  const { data: targetSheetsDescending } = useSheetsDescending(selectedTargetDrawingId || undefined);
+  const { data: sourceSheetBlocks } = useBlocksBySheet(selectedSourceSheetId || undefined);
+  const { data: targetSheetBlocks } = useBlocksBySheet(selectedTargetSheetId || undefined);
 
   // Poll for drawing processing status
   const { data: sourceDrawingStatus, isLoading: sourceStatusLoading } = useDrawingStatus(uploadedSourceDrawingId || undefined);
@@ -132,17 +148,17 @@ export default function NewOverlay() {
       }))
     : [];
 
-  // Blocks from uploaded drawings
-  const sourceBlocks = sourceDrawingStatus?.blocks?.filter(b => b.type === 'Plan') || [];
-  const targetBlocks = targetDrawingStatus?.blocks?.filter(b => b.type === 'Plan') || [];
+  // Blocks from uploaded drawings - show all blocks, not just Plan blocks
+  const sourceBlocks = sourceDrawingStatus?.blocks || [];
+  const targetBlocks = targetDrawingStatus?.blocks || [];
 
-  // Auto-select first Plan block when available
+  // Auto-select first block when available
   useEffect(() => {
     if (sourceDrawingStatus?.status === 'completed' && sourceBlocks.length > 0 && !selectedSourceBlock) {
       setSelectedSourceBlock(sourceBlocks[0].id);
         toast({
           title: "Processing Complete",
-        description: `Found ${sourceBlocks.length} plan blocks in source drawing`,
+        description: `Found ${sourceBlocks.length} blocks in source drawing`,
         });
       }
   }, [sourceDrawingStatus, sourceBlocks.length]);
@@ -152,35 +168,57 @@ export default function NewOverlay() {
       setSelectedTargetBlock(targetBlocks[0].id);
         toast({
           title: "Processing Complete",
-        description: `Found ${targetBlocks.length} plan blocks in compare drawing`,
+        description: `Found ${targetBlocks.length} blocks in compare drawing`,
       });
     }
   }, [targetDrawingStatus, targetBlocks.length]);
 
   // Handle file upload
   const handleFileUpload = async (file: File, type: 'source' | 'target') => {
+    const mutation = type === 'source' ? createSourceDrawingWithUpload : createTargetDrawingWithUpload;
+    const drawingType = type === 'source' ? 'Source' : 'Target';
+    
     try {
-      const drawing = await createDrawingWithUpload.mutateAsync({
+      console.log(`[NewOverlay] Starting ${drawingType} drawing upload: ${file.name}`);
+      
+      const drawing = await mutation.mutateAsync({
         projectId,
         file,
         name: file.name.replace(/\.[^/.]+$/, ''),
       });
 
+      console.log(`[NewOverlay] ${drawingType} drawing created:`, drawing.id);
+
       if (type === 'source') {
         setUploadedSourceDrawingId(drawing.id);
         setSourceMethod("upload");
+        // Force refetch to start polling immediately
+        queryClient.invalidateQueries({ queryKey: ['drawing', drawing.id, 'status'] });
+        // Also refetch after a short delay to ensure polling starts
+        setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: ['drawing', drawing.id, 'status'] });
+        }, 500);
       } else {
         setUploadedTargetDrawingId(drawing.id);
         setTargetMethod("upload");
+        // Force refetch to start polling immediately
+        queryClient.invalidateQueries({ queryKey: ['drawing', drawing.id, 'status'] });
+        // Also refetch after a short delay to ensure polling starts
+        setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: ['drawing', drawing.id, 'status'] });
+        }, 500);
       }
 
       toast({
-        title: "Upload Complete",
+        title: `${drawingType} Upload Complete`,
         description: `${file.name} has been uploaded. Processing blocks...`,
       });
+      
+      console.log(`[NewOverlay] ${drawingType} drawing upload complete, job_id:`, drawing.job_id);
     } catch (error) {
+      console.error(`[NewOverlay] ${drawingType} drawing upload failed:`, error);
       toast({
-        title: "Upload Failed",
+        title: `${drawingType} Upload Failed`,
         description: error instanceof Error ? error.message : "Failed to upload file",
         variant: "destructive",
       });
@@ -258,22 +296,37 @@ export default function NewOverlay() {
       return;
     }
 
+    console.log('[NewOverlay] Creating comparison with blocks:', { sourceBlock, targetBlock });
+    console.log('[NewOverlay] Source method:', sourceMethod, 'Target method:', targetMethod);
+    console.log('[NewOverlay] Source drawing:', uploadedSourceDrawingId || selectedSourceDrawingId);
+    console.log('[NewOverlay] Target drawing:', uploadedTargetDrawingId || selectedTargetDrawingId);
+
     try {
+      // For the API, we need:
+      // - drawing_a_id/drawing_b_id: The parent drawing IDs (used for tracking, can be block ID as fallback)
+      // - sheet_a_id/sheet_b_id: The actual block IDs to compare (these are what matter)
+      // The API uses sheet_a_id/sheet_b_id if provided, otherwise falls back to drawing_a_id/drawing_b_id
+      const sourceDrawingId = uploadedSourceDrawingId || selectedSourceDrawingId || sourceBlock;
+      const targetDrawingId = uploadedTargetDrawingId || selectedTargetDrawingId || targetBlock;
+
       const result = await createComparison.mutateAsync({
         project_id: projectId,
-        drawing_a_id: uploadedSourceDrawingId || '',
-        drawing_b_id: uploadedTargetDrawingId || '',
+        drawing_a_id: sourceDrawingId,
+        drawing_b_id: targetDrawingId,
         sheet_a_id: sourceBlock,
         sheet_b_id: targetBlock,
     });
     
+    console.log('[NewOverlay] Comparison created:', result.id);
+    console.log('[NewOverlay] Comparison URL:', `/project/${projectId}/overlay/${result.id}`);
+    
     toast({
         title: "Comparison Started",
-        description: "Generating overlay and analyzing changes...",
+        description: `Comparison ID: ${result.id.slice(0, 8)}... Generating overlay and analyzing changes...`,
       });
 
-      // Navigate to overlay viewer
-      setLocation(`/project/${projectId}/overlay?comparison=${result.id}`);
+      // Navigate to overlay viewer with comparison ID in path
+      setLocation(`/project/${projectId}/overlay/${result.id}`);
     } catch (error) {
       toast({
         title: "Failed to Start Comparison",
@@ -361,7 +414,7 @@ export default function NewOverlay() {
               <div className="flex items-center justify-between">
                 <CardTitle className="text-lg flex items-center gap-2">
                   <div className="w-6 h-6 rounded-full bg-red-100 text-red-600 flex items-center justify-center text-xs font-bold">1</div>
-                  Base Drawing
+                  OLD Drawing
                 </CardTitle>
                 <Badge variant="outline" className="text-red-600 border-red-200">Previous</Badge>
               </div>
@@ -370,8 +423,8 @@ export default function NewOverlay() {
                     <CardContent className="space-y-4">
                       {/* Method Selection */}
                       <div className="grid grid-cols-2 gap-3">
-                        <div 
-                          onClick={() => { setSourceMethod("existing"); setUploadedSourceDrawingId(null); setSelectedSourceBlock(null); }}
+                        <div
+                          onClick={() => { setSourceMethod("existing"); setUploadedSourceDrawingId(null); setSelectedSourceBlock(null); setSelectedSourceDrawingId(null); setSelectedSourceSheetId(null); }}
                           className={`p-4 rounded-xl border-2 cursor-pointer transition-all text-center ${
                             sourceMethod === "existing" ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'
                           }`}
@@ -380,8 +433,8 @@ export default function NewOverlay() {
                           <p className="font-medium text-sm">Existing Set</p>
                           <p className="text-xs text-muted-foreground">From library</p>
                         </div>
-                        <div 
-                          onClick={() => { setSourceMethod("upload"); setSelectedSourceBlock(null); }}
+                        <div
+                          onClick={() => { setSourceMethod("upload"); setSelectedSourceBlock(null); setSelectedSourceDrawingId(null); setSelectedSourceSheetId(null); }}
                           className={`p-4 rounded-xl border-2 cursor-pointer transition-all text-center ${
                             sourceMethod === "upload" ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'
                           }`}
@@ -392,38 +445,108 @@ export default function NewOverlay() {
                         </div>
                       </div>
 
-                      {/* Existing Set Selection */}
+                      {/* Existing Set Selection - Hierarchical: Drawing → Sheet → Block */}
                       {sourceMethod === "existing" && (
-                        <div className="animate-in slide-in-from-top-2 space-y-2">
-                          <Label className="text-xs font-medium text-muted-foreground uppercase">Select Block</Label>
-                          <ScrollArea className="h-[180px] border border-border rounded-lg">
-                        <div className="p-2 space-y-1">
-                              {availableBlocks.length > 0 ? availableBlocks.map((block) => (
-                            <div 
-                              key={block.id}
-                                  onClick={() => setSelectedSourceBlock(block.id)}
-                              className={`p-3 rounded-md cursor-pointer transition-all text-sm ${
-                                    selectedSourceBlock === block.id 
-                                  ? 'bg-red-50 border-2 border-red-300 dark:bg-red-900/20 dark:border-red-700' 
-                                  : 'hover:bg-muted/50 border border-transparent'
-                              }`}
+                        <div className="animate-in slide-in-from-top-2 space-y-3">
+                          {/* Step 1: Select Drawing */}
+                          <div className="space-y-1.5">
+                            <Label className="text-xs font-medium text-muted-foreground uppercase">1. Select Drawing</Label>
+                            <Select
+                              value={selectedSourceDrawingId || ""}
+                              onValueChange={(value) => {
+                                setSelectedSourceDrawingId(value);
+                                setSelectedSourceSheetId(null);
+                                setSelectedSourceBlock(null);
+                              }}
                             >
-                              <div className="flex items-center justify-between">
-                                <span className="font-medium">{block.name}</span>
-                                <Badge variant="outline" className="text-[10px] h-4">{block.type}</Badge>
-                              </div>
+                              <SelectTrigger className="w-full">
+                                <SelectValue placeholder="Choose a drawing set..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {drawingsDescending && drawingsDescending.length > 0 ? (
+                                  drawingsDescending.map((drawing) => (
+                                    <SelectItem key={drawing.id} value={drawing.id}>
+                                      {drawing.name || drawing.filename} ({new Date(drawing.created_at).toLocaleDateString()})
+                                    </SelectItem>
+                                  ))
+                                ) : (
+                                  <SelectItem value="none" disabled>No drawings available</SelectItem>
+                                )}
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          {/* Step 2: Select Sheet */}
+                          {selectedSourceDrawingId && (
+                            <div className="space-y-1.5">
+                              <Label className="text-xs font-medium text-muted-foreground uppercase">2. Select Sheet</Label>
+                              <Select
+                                value={selectedSourceSheetId || ""}
+                                onValueChange={(value) => {
+                                  setSelectedSourceSheetId(value);
+                                  setSelectedSourceBlock(null);
+                                }}
+                              >
+                                <SelectTrigger className="w-full">
+                                  <SelectValue placeholder="Choose a sheet..." />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {sourceSheetsDescending && sourceSheetsDescending.length > 0 ? (
+                                    sourceSheetsDescending.map((sheet) => (
+                                      <SelectItem key={sheet.id} value={sheet.id}>
+                                        {sheet.sheet_number || sheet.title || `Sheet ${sheet.index + 1}`}
+                                      </SelectItem>
+                                    ))
+                                  ) : (
+                                    <SelectItem value="none" disabled>No sheets found</SelectItem>
+                                  )}
+                                </SelectContent>
+                              </Select>
                             </div>
-                              )) : (
-                                <div className="p-4 text-center text-muted-foreground text-sm">
-                                  <FileText className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                                  <p>No blocks available</p>
-                                  <p className="text-xs mt-1">Upload a drawing first</p>
-                    </div>
-                  )}
+                          )}
+
+                          {/* Step 3: Select Block */}
+                          {selectedSourceSheetId && (
+                            <div className="space-y-1.5">
+                              <Label className="text-xs font-medium text-muted-foreground uppercase">3. Select Block</Label>
+                              <ScrollArea className="h-[120px] border border-border rounded-lg">
+                                <div className="p-2 space-y-1">
+                                  {sourceSheetBlocks && sourceSheetBlocks.length > 0 ? sourceSheetBlocks.map((block) => (
+                                    <div
+                                      key={block.id}
+                                      onClick={() => setSelectedSourceBlock(block.id)}
+                                      className={`p-3 rounded-md cursor-pointer transition-all text-sm ${
+                                        selectedSourceBlock === block.id
+                                          ? 'bg-red-50 border-2 border-red-300 dark:bg-red-900/20 dark:border-red-700'
+                                          : 'hover:bg-muted/50 border border-transparent'
+                                      }`}
+                                    >
+                                      <div className="flex items-center justify-between">
+                                        <span className="font-medium">{block.description || block.type || "Block"}</span>
+                                        <Badge variant="outline" className="text-[10px] h-4">{block.type || "Plan"}</Badge>
+                                      </div>
+                                    </div>
+                                  )) : (
+                                    <div className="p-4 text-center text-muted-foreground text-sm">
+                                      <FileText className="w-6 h-6 mx-auto mb-2 opacity-50" />
+                                      <p>No blocks in this sheet</p>
+                                    </div>
+                                  )}
+                                </div>
+                              </ScrollArea>
+                            </div>
+                          )}
+
+                          {/* Selection summary */}
+                          {selectedSourceBlock && (
+                            <div className="p-2 bg-red-50 dark:bg-red-900/20 rounded-md border border-red-200 dark:border-red-800">
+                              <p className="text-xs text-red-600 dark:text-red-400 font-medium">
+                                ✓ Block selected from {sourceSheetsDescending?.find(s => s.id === selectedSourceSheetId)?.sheet_number || 'sheet'}
+                              </p>
+                            </div>
+                          )}
                         </div>
-                      </ScrollArea>
-                    </div>
-                  )}
+                      )}
 
                       {/* Upload Area */}
                       {sourceMethod === "upload" && (
@@ -443,7 +566,7 @@ export default function NewOverlay() {
                       onDragOver={(e) => e.preventDefault()}
                       onDrop={(e) => handleFileDrop(e, 'source')}
                     >
-                      {createDrawingWithUpload.isPending ? (
+                      {createSourceDrawingWithUpload.isPending ? (
                         <>
                           <Loader2 className="w-8 h-8 mx-auto mb-2 text-primary animate-spin" />
                           <p className="font-medium text-sm">Uploading...</p>
@@ -476,7 +599,7 @@ export default function NewOverlay() {
               <div className="flex items-center justify-between">
                 <CardTitle className="text-lg flex items-center gap-2">
                   <div className="w-6 h-6 rounded-full bg-green-100 text-green-600 flex items-center justify-center text-xs font-bold">2</div>
-                  Compare Drawing
+                  NEW Drawing
                 </CardTitle>
                 <Badge variant="outline" className="text-green-600 border-green-200">Current</Badge>
               </div>
@@ -485,8 +608,8 @@ export default function NewOverlay() {
                     <CardContent className="space-y-4">
                       {/* Method Selection */}
                       <div className="grid grid-cols-2 gap-3">
-                        <div 
-                          onClick={() => { setTargetMethod("existing"); setUploadedTargetDrawingId(null); setSelectedTargetBlock(null); }}
+                        <div
+                          onClick={() => { setTargetMethod("existing"); setUploadedTargetDrawingId(null); setSelectedTargetBlock(null); setSelectedTargetDrawingId(null); setSelectedTargetSheetId(null); }}
                           className={`p-4 rounded-xl border-2 cursor-pointer transition-all text-center ${
                             targetMethod === "existing" ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'
                           }`}
@@ -495,8 +618,8 @@ export default function NewOverlay() {
                           <p className="font-medium text-sm">Existing Set</p>
                           <p className="text-xs text-muted-foreground">From library</p>
                         </div>
-                        <div 
-                          onClick={() => { setTargetMethod("upload"); setSelectedTargetBlock(null); }}
+                        <div
+                          onClick={() => { setTargetMethod("upload"); setSelectedTargetBlock(null); setSelectedTargetDrawingId(null); setSelectedTargetSheetId(null); }}
                           className={`p-4 rounded-xl border-2 cursor-pointer transition-all text-center ${
                             targetMethod === "upload" ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'
                           }`}
@@ -507,38 +630,108 @@ export default function NewOverlay() {
                         </div>
                       </div>
 
-                      {/* Existing Set Selection */}
+                      {/* Existing Set Selection - Hierarchical: Drawing → Sheet → Block */}
                       {targetMethod === "existing" && (
-                        <div className="animate-in slide-in-from-top-2 space-y-2">
-                          <Label className="text-xs font-medium text-muted-foreground uppercase">Select Block</Label>
-                          <ScrollArea className="h-[180px] border border-border rounded-lg">
-                        <div className="p-2 space-y-1">
-                              {availableBlocks.length > 0 ? availableBlocks.map((block) => (
-                            <div 
-                              key={block.id}
-                                  onClick={() => setSelectedTargetBlock(block.id)}
-                              className={`p-3 rounded-md cursor-pointer transition-all text-sm ${
-                                    selectedTargetBlock === block.id 
-                                  ? 'bg-green-50 border-2 border-green-300 dark:bg-green-900/20 dark:border-green-700' 
-                                  : 'hover:bg-muted/50 border border-transparent'
-                              }`}
+                        <div className="animate-in slide-in-from-top-2 space-y-3">
+                          {/* Step 1: Select Drawing */}
+                          <div className="space-y-1.5">
+                            <Label className="text-xs font-medium text-muted-foreground uppercase">1. Select Drawing</Label>
+                            <Select
+                              value={selectedTargetDrawingId || ""}
+                              onValueChange={(value) => {
+                                setSelectedTargetDrawingId(value);
+                                setSelectedTargetSheetId(null);
+                                setSelectedTargetBlock(null);
+                              }}
                             >
-                              <div className="flex items-center justify-between">
-                                <span className="font-medium">{block.name}</span>
-                                <Badge variant="outline" className="text-[10px] h-4">{block.type}</Badge>
-                              </div>
+                              <SelectTrigger className="w-full">
+                                <SelectValue placeholder="Choose a drawing set..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {drawingsDescending && drawingsDescending.length > 0 ? (
+                                  drawingsDescending.map((drawing) => (
+                                    <SelectItem key={drawing.id} value={drawing.id}>
+                                      {drawing.name || drawing.filename} ({new Date(drawing.created_at).toLocaleDateString()})
+                                    </SelectItem>
+                                  ))
+                                ) : (
+                                  <SelectItem value="none" disabled>No drawings available</SelectItem>
+                                )}
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          {/* Step 2: Select Sheet */}
+                          {selectedTargetDrawingId && (
+                            <div className="space-y-1.5">
+                              <Label className="text-xs font-medium text-muted-foreground uppercase">2. Select Sheet</Label>
+                              <Select
+                                value={selectedTargetSheetId || ""}
+                                onValueChange={(value) => {
+                                  setSelectedTargetSheetId(value);
+                                  setSelectedTargetBlock(null);
+                                }}
+                              >
+                                <SelectTrigger className="w-full">
+                                  <SelectValue placeholder="Choose a sheet..." />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {targetSheetsDescending && targetSheetsDescending.length > 0 ? (
+                                    targetSheetsDescending.map((sheet) => (
+                                      <SelectItem key={sheet.id} value={sheet.id}>
+                                        {sheet.sheet_number || sheet.title || `Sheet ${sheet.index + 1}`}
+                                      </SelectItem>
+                                    ))
+                                  ) : (
+                                    <SelectItem value="none" disabled>No sheets found</SelectItem>
+                                  )}
+                                </SelectContent>
+                              </Select>
                             </div>
-                              )) : (
-                                <div className="p-4 text-center text-muted-foreground text-sm">
-                                  <FileText className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                                  <p>No blocks available</p>
-                                  <p className="text-xs mt-1">Upload a drawing first</p>
-                    </div>
-                  )}
+                          )}
+
+                          {/* Step 3: Select Block */}
+                          {selectedTargetSheetId && (
+                            <div className="space-y-1.5">
+                              <Label className="text-xs font-medium text-muted-foreground uppercase">3. Select Block</Label>
+                              <ScrollArea className="h-[120px] border border-border rounded-lg">
+                                <div className="p-2 space-y-1">
+                                  {targetSheetBlocks && targetSheetBlocks.length > 0 ? targetSheetBlocks.map((block) => (
+                                    <div
+                                      key={block.id}
+                                      onClick={() => setSelectedTargetBlock(block.id)}
+                                      className={`p-3 rounded-md cursor-pointer transition-all text-sm ${
+                                        selectedTargetBlock === block.id
+                                          ? 'bg-green-50 border-2 border-green-300 dark:bg-green-900/20 dark:border-green-700'
+                                          : 'hover:bg-muted/50 border border-transparent'
+                                      }`}
+                                    >
+                                      <div className="flex items-center justify-between">
+                                        <span className="font-medium">{block.description || block.type || "Block"}</span>
+                                        <Badge variant="outline" className="text-[10px] h-4">{block.type || "Plan"}</Badge>
+                                      </div>
+                                    </div>
+                                  )) : (
+                                    <div className="p-4 text-center text-muted-foreground text-sm">
+                                      <FileText className="w-6 h-6 mx-auto mb-2 opacity-50" />
+                                      <p>No blocks in this sheet</p>
+                                    </div>
+                                  )}
+                                </div>
+                              </ScrollArea>
+                            </div>
+                          )}
+
+                          {/* Selection summary */}
+                          {selectedTargetBlock && (
+                            <div className="p-2 bg-green-50 dark:bg-green-900/20 rounded-md border border-green-200 dark:border-green-800">
+                              <p className="text-xs text-green-600 dark:text-green-400 font-medium">
+                                ✓ Block selected from {targetSheetsDescending?.find(s => s.id === selectedTargetSheetId)?.sheet_number || 'sheet'}
+                              </p>
+                            </div>
+                          )}
                         </div>
-                      </ScrollArea>
-                    </div>
-                  )}
+                      )}
 
                       {/* Upload Area */}
                       {targetMethod === "upload" && (
@@ -558,7 +751,7 @@ export default function NewOverlay() {
                       onDragOver={(e) => e.preventDefault()}
                       onDrop={(e) => handleFileDrop(e, 'target')}
                     >
-                      {createDrawingWithUpload.isPending ? (
+                      {createTargetDrawingWithUpload.isPending ? (
                         <>
                           <Loader2 className="w-8 h-8 mx-auto mb-2 text-primary animate-spin" />
                           <p className="font-medium text-sm">Uploading...</p>
@@ -616,7 +809,7 @@ export default function NewOverlay() {
                           </CardTitle>
                           <CardDescription>
                             {sourceDrawingStatus?.status === 'completed' 
-                              ? `${sourceBlocks.length} plan blocks extracted` 
+                              ? `${sourceBlocks.length} block${sourceBlocks.length !== 1 ? 's' : ''} extracted` 
                               : sourceDrawingStatus?.status === 'processing' || sourceDrawingStatus?.status === 'pending'
                               ? 'AI is extracting blocks...'
                               : 'Waiting...'}
@@ -681,7 +874,7 @@ export default function NewOverlay() {
                           </CardTitle>
                           <CardDescription>
                             {targetDrawingStatus?.status === 'completed' 
-                              ? `${targetBlocks.length} plan blocks extracted` 
+                              ? `${targetBlocks.length} block${targetBlocks.length !== 1 ? 's' : ''} extracted` 
                               : targetDrawingStatus?.status === 'processing' || targetDrawingStatus?.status === 'pending'
                               ? 'AI is extracting blocks...'
                               : 'Waiting...'}

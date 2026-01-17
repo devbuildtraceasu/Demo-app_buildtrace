@@ -26,6 +26,10 @@ model User {
   // OAuth fields
   googleId String? @unique @map("google_id")
 
+  // Password reset fields
+  passwordResetToken   String?   @map("password_reset_token")
+  passwordResetExpires DateTime? @map("password_reset_expires")
+
   organizationId String?       @map("organization_id")
   organization   Organization? @relation(fields: [organizationId], references: [id])
 

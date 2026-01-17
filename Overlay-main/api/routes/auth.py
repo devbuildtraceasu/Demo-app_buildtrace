@@ -10,7 +10,14 @@ from sqlmodel import select
 from api.config import settings
 from api.dependencies import OptionalUser, SessionDep
 from api.models import Organization, User, generate_cuid
-from api.schemas.auth import TokenResponse, UserCreate, UserLogin, UserResponse
+from api.schemas.auth import (
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
+    TokenResponse,
+    UserCreate,
+    UserLogin,
+    UserResponse,
+)
 
 router = APIRouter()
 
@@ -59,6 +66,7 @@ async def signup(user_data: UserCreate, session: SessionDep):
     org = Organization(
         id=generate_cuid(),
         name=f"{user_data.email.split('@')[0]}'s Organization",
+        slug=user_data.email.split('@')[0].lower().replace(' ', '-'),
     )
     session.add(org)
     session.commit()
@@ -164,6 +172,74 @@ async def get_current_user_info(user: OptionalUser, session: SessionDep):
 async def logout():
     """Logout (client should discard token)."""
     return {"message": "Logged out successfully"}
+
+
+@router.post("/forgot-password")
+async def forgot_password(request: ForgotPasswordRequest, session: SessionDep):
+    """Request password reset token."""
+    import secrets
+
+    # Find user by email
+    statement = select(User).where(User.email == request.email, User.deleted_at.is_(None))
+    user = session.exec(statement).first()
+
+    # Always return success to prevent email enumeration
+    if not user:
+        return {"message": "If the email exists, a reset link will be sent"}
+
+    # Generate reset token (32 bytes = 64 hex chars)
+    reset_token = secrets.token_urlsafe(32)
+
+    # Token expires in 1 hour
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+
+    # Update user with reset token
+    user.password_reset_token = reset_token
+    user.password_reset_expires = expires_at
+    session.add(user)
+    session.commit()
+
+    # TODO: Send email with reset link
+    # For now, we'll just log the token (in production, send via email service)
+    print(f"Password reset token for {user.email}: {reset_token}")
+    print(f"Reset link: {settings.frontend_url}/reset-password?token={reset_token}")
+
+    return {"message": "If the email exists, a reset link will be sent"}
+
+
+@router.post("/reset-password")
+async def reset_password(request: ResetPasswordRequest, session: SessionDep):
+    """Reset password with token."""
+    # Find user with matching token
+    statement = select(User).where(
+        User.password_reset_token == request.token,
+        User.deleted_at.is_(None),
+    )
+    user = session.exec(statement).first()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token",
+        )
+
+    # Check if token is expired
+    if user.password_reset_expires is None or user.password_reset_expires < datetime.now(
+        timezone.utc
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token",
+        )
+
+    # Update password
+    user.password_hash = get_password_hash(request.new_password)
+    user.password_reset_token = None
+    user.password_reset_expires = None
+    session.add(user)
+    session.commit()
+
+    return {"message": "Password reset successfully"}
 
 
 # Google OAuth routes are handled by google_auth.router

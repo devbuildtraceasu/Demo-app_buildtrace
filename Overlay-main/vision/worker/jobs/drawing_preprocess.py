@@ -136,8 +136,32 @@ def _create_sheet_jobs(
     drawing_id: str,
     drawing_job: Job,
 ) -> list[Job]:
+    """Create sheet preprocessing jobs, skipping sheets that already have active jobs.
+    
+    This prevents duplicate jobs from being created if the drawing job is retried
+    or if sheets are re-processed.
+    """
     jobs: list[Job] = []
     for sheet in sheets:
+        # Check if a job already exists for this sheet
+        existing_job = session.exec(
+            select(Job).where(
+                Job.target_id == sheet.id,
+                Job.target_type == "sheet",
+                Job.type == JobType.SHEET_PREPROCESS,
+            ).order_by(Job.created_at.desc())
+        ).first()
+        
+        # Skip if job already exists and is in a non-terminal state
+        if existing_job and existing_job.status in (JobStatus.QUEUED, JobStatus.STARTED, JobStatus.COMPLETED):
+            logger.info(
+                f"[job.skip.duplicate] Sheet {sheet.id} already has a {existing_job.status.value} job "
+                f"({existing_job.id}), skipping creation"
+            )
+            jobs.append(existing_job)
+            continue
+        
+        # Create new job if no existing job or if existing job is in terminal failure state
         job_id = generate_cuid()
         job = Job(
             id=job_id,
@@ -164,6 +188,10 @@ def _create_sheet_jobs(
         )
         session.add(job)
         jobs.append(job)
+        logger.info(
+            f"[job.created] Created new sheet preprocessing job {job_id} for sheet {sheet.id}"
+        )
+    
     session.commit()
     for job in jobs:
         session.refresh(job)
@@ -259,15 +287,18 @@ def run_drawing_job(
 
         with log_phase(logger, "Publish sheet jobs", drawing_id=payload.drawing_id):
             for job, sheet in zip(sheet_jobs, sheets):
-                pubsub_client.publish(
-                    config.vision_topic,
-                    build_job_envelope(
-                        job_type=job.type,
-                        job_id=str(job.id),
-                        payload={"sheetId": sheet.id, "drawingId": payload.drawing_id},
-                    ),
-                    attributes={"type": job.type, "id": str(job.id)},
-                )
+                # Always publish Queued jobs, even if they're duplicates
+                # This ensures jobs that were created but never published get into the queue
+                if job.status == JobStatus.QUEUED:
+                    pubsub_client.publish(
+                        config.vision_topic,
+                        build_job_envelope(
+                            job_type=job.type,
+                            job_id=str(job.id),
+                            payload={"sheetId": sheet.id, "drawingId": payload.drawing_id},
+                        ),
+                        attributes={"type": job.type, "id": str(job.id)},
+                    )
 
         log_coordination_published(
             logger,

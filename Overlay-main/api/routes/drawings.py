@@ -146,55 +146,91 @@ async def create_drawing(
     session.commit()
     session.refresh(drawing)
     
-    # Create preprocessing job
-    job_id = generate_cuid()
-    job = JobModel(
-        id=job_id,
-        project_id=drawing.project_id,
-        target_type="drawing",
-        target_id=drawing.id,
-        type="vision.drawing.preprocess",
-        status="Queued",
-        payload={"drawing_id": drawing.id},
-    )
-    session.add(job)
-    session.commit()
+    # Check if a preprocessing job already exists for this drawing
+    existing_job = session.exec(
+        select(JobModel).where(
+            JobModel.target_id == drawing.id,
+            JobModel.target_type == "drawing",
+            JobModel.type == "vision.drawing.preprocess",
+        ).order_by(JobModel.created_at.desc())
+    ).first()
     
-    # Publish preprocessing job to Pub/Sub
-    job_payload = {
-        "type": "vision.drawing.preprocess",
-        "id": job_id,
-        "payload": {
-            "drawingId": drawing.id,
-        },
-    }
-    
-    try:
-        logger.info(f"Publishing preprocessing job {job_id} for drawing {drawing.id}")
-        pubsub = get_pubsub_client()
-        topic_path = pubsub.topic_path(settings.pubsub_project_id, settings.vision_topic)
-        
-        future = pubsub.publish(
-            topic_path,
-            json.dumps(job_payload).encode("utf-8"),
-            type="vision.drawing.preprocess",
-            id=job_id,
+    # Skip job creation if one already exists and is in a non-terminal state
+    if existing_job and existing_job.status in ("Queued", "Started", "Completed"):
+        logger.info(
+            f"Drawing {drawing.id} already has a {existing_job.status} preprocessing job "
+            f"({existing_job.id}), skipping creation"
         )
-        message_id = future.result(timeout=10.0)
-        logger.info(f"Successfully published preprocessing job {job_id}, message_id={message_id}")
-    except Exception as e:
-        logger.error(f"Failed to publish preprocessing job {job_id}: {e}", exc_info=True)
-        # Update job status to indicate publish failure
-        job.status = "Failed"
-        job.events = job.events or []
-        job.events.append({
-            "type": "failed",
-            "event_type": "publish_failed",
-            "metadata": {"error": str(e)},
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        job_id = existing_job.id
+        job = existing_job
+    else:
+        # Create preprocessing job
+        job_id = generate_cuid()
+        job = JobModel(
+            id=job_id,
+            project_id=drawing.project_id,
+            target_type="drawing",
+            target_id=drawing.id,
+            type="vision.drawing.preprocess",
+            status="Queued",
+            payload={"drawing_id": drawing.id},
+        )
         session.add(job)
         session.commit()
+        session.refresh(job)  # Ensure job is fully loaded before publishing
+    
+    # Publish preprocessing job to Pub/Sub (only if job is new or needs retry)
+    if job.status == "Queued":
+        job_payload = {
+            "type": "vision.drawing.preprocess",
+            "id": job_id,
+            "payload": {
+                "drawingId": drawing.id,
+            },
+        }
+        
+        try:
+            logger.info(f"Publishing preprocessing job {job_id} for drawing {drawing.id}")
+            pubsub = get_pubsub_client()
+            topic_path = pubsub.topic_path(settings.pubsub_project_id, settings.vision_topic)
+            
+            # Retry publishing up to 3 times with exponential backoff
+            max_retries = 3
+            last_error = None
+            for attempt in range(max_retries):
+                try:
+                    future = pubsub.publish(
+                        topic_path,
+                        json.dumps(job_payload).encode("utf-8"),
+                        type="vision.drawing.preprocess",
+                        id=job_id,
+                    )
+                    message_id = future.result(timeout=10.0)
+                    logger.info(f"Successfully published preprocessing job {job_id}, message_id={message_id} (attempt {attempt + 1})")
+                    break  # Success, exit retry loop
+                except Exception as e:
+                    last_error = e
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 0.5  # Exponential backoff: 0.5s, 1s, 2s
+                        logger.warning(f"Publish attempt {attempt + 1} failed for job {job_id}, retrying in {wait_time}s: {e}")
+                        import time
+                        time.sleep(wait_time)
+                    else:
+                        raise  # Re-raise on final attempt
+            
+        except Exception as e:
+            logger.error(f"Failed to publish preprocessing job {job_id} after {max_retries} attempts: {e}", exc_info=True)
+            # Update job status to indicate publish failure
+            job.status = "Failed"
+            job.events = job.events or []
+            job.events.append({
+                "type": "failed",
+                "event_type": "publish_failed",
+                "metadata": {"error": str(e), "attempts": max_retries},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            session.add(job)
+            session.commit()
 
     return DrawingResponse(
         id=drawing.id,

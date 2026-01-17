@@ -166,3 +166,58 @@ async def get_download_url(
         "expires_in": 3600,
     }
 
+
+@router.post("/public/upload")
+async def public_upload(
+    file: UploadFile = File(...),
+    storage: StorageDep = None,
+):
+    """Public upload endpoint for Try a Project feature. No authentication required.
+    Files are stored in a temp folder for public comparisons.
+    """
+    if storage is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Storage not configured",
+        )
+
+    # Validate file type
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Filename is required",
+        )
+
+    validate_file_type(file.filename, file.content_type or "application/octet-stream")
+
+    # Read file contents and validate size
+    contents = await file.read()
+    validate_file_size(len(contents))
+
+    # Generate unique remote path in temp folder
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    unique_id = uuid.uuid4().hex[:8]
+    extension = file.filename.rsplit(".", 1)[-1] if "." in file.filename else "pdf"
+
+    remote_path = f"temp/public/{timestamp}-{unique_id}.{extension}"
+
+    try:
+        uri = storage.upload_from_bytes(
+            contents,
+            remote_path,
+            content_type=file.content_type or "application/octet-stream",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to upload file: {str(e)}",
+        )
+
+    return {
+        "uri": uri,
+        "remote_path": remote_path,
+        "filename": file.filename,
+        "content_type": file.content_type,
+        "size": len(contents),
+    }
+

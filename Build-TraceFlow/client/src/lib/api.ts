@@ -54,6 +54,7 @@ export interface DrawingStatus {
   job_id?: string;
   sheet_count: number;
   block_count: number;
+  progress: number;  // 0-100 percentage
   blocks: Array<{
     id: string;
     type?: string;
@@ -242,6 +243,16 @@ async function del(url: string): Promise<void> {
 
 // Auth API
 export const auth = {
+  signup: async (email: string, password: string, firstName?: string, lastName?: string) => {
+    const response = await post<{ access_token: string; user: User }>('/auth/signup', {
+      email,
+      password,
+      first_name: firstName,
+      last_name: lastName,
+    });
+    setAuthToken(response.access_token);
+    return response;
+  },
   login: async (email: string, password: string) => {
     const response = await post<{ access_token: string; user: User }>('/auth/login', { email, password });
     setAuthToken(response.access_token);
@@ -253,6 +264,9 @@ export const auth = {
   },
   me: () => get<User | null>('/auth/me'),
   getGoogleAuthUrl: () => get<{ url: string }>('/auth/google/url'),
+  forgotPassword: (email: string) => post<{ message: string }>('/auth/forgot-password', { email }),
+  resetPassword: (token: string, newPassword: string) =>
+    post<{ message: string }>('/auth/reset-password', { token, new_password: newPassword }),
 };
 
 // Projects API
@@ -295,6 +309,7 @@ export const comparisons = {
     sheet_a_id?: string;
     sheet_b_id?: string;
   }) => post<Comparison>('/comparisons', data),
+  delete: (id: string) => del(`/comparisons/${id}`),
   getChanges: (comparisonId: string) => get<Change[]>(`/comparisons/${comparisonId}/changes`),
   createChange: (comparisonId: string, data: Partial<Change>) =>
     post<Change>(`/comparisons/${comparisonId}/changes`, data),

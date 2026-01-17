@@ -11,10 +11,13 @@ import api, { setAuthToken } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 
 export default function AuthPage() {
+  const [mode, setMode] = useState<"login" | "signup">("login");
   const [isLoading, setIsLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [, setLocation] = useLocation();
   const searchString = useSearch();
   const { toast } = useToast();
@@ -55,6 +58,28 @@ export default function AuthPage() {
     }
   };
 
+  const handleSignup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+
+    try {
+      await api.auth.signup(email, password, firstName, lastName);
+      toast({
+        title: "Welcome!",
+        description: "Account created successfully",
+      });
+      setLocation("/onboarding");
+    } catch (error) {
+      toast({
+        title: "Signup Failed",
+        description: error instanceof Error ? error.message : "Could not create account",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleGoogleLogin = async () => {
     setGoogleLoading(true);
 
@@ -76,14 +101,24 @@ export default function AuthPage() {
       <div className="w-full max-w-md space-y-8">
         <div className="text-center space-y-2">
           <img src={logo} alt="BuildTrace" className="w-12 h-12 rounded-lg mb-4 inline-block" />
-          <h1 className="text-3xl font-bold font-display tracking-tight">Welcome back</h1>
-          <p className="text-muted-foreground">Enter your credentials to access your workspace</p>
+          <h1 className="text-3xl font-bold font-display tracking-tight">
+            {mode === "login" ? "Welcome back" : "Create your account"}
+          </h1>
+          <p className="text-muted-foreground">
+            {mode === "login"
+              ? "Enter your credentials to access your workspace"
+              : "Sign up to get started with BuildTrace"}
+          </p>
         </div>
 
         <Card className="border-border shadow-lg">
           <CardHeader>
-            <CardTitle>Sign In</CardTitle>
-            <CardDescription>Use your organization email address</CardDescription>
+            <CardTitle>{mode === "login" ? "Sign In" : "Sign Up"}</CardTitle>
+            <CardDescription>
+              {mode === "login"
+                ? "Use your organization email address"
+                : "Create your account with your email"}
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
             {/* Google OAuth Button */}
@@ -127,7 +162,33 @@ export default function AuthPage() {
             </div>
 
             {/* Email/Password Form */}
-            <form onSubmit={handleLogin} className="space-y-4">
+            <form onSubmit={mode === "login" ? handleLogin : handleSignup} className="space-y-4">
+              {mode === "signup" && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="firstName">First Name</Label>
+                    <Input
+                      id="firstName"
+                      type="text"
+                      placeholder="John"
+                      value={firstName}
+                      onChange={(e) => setFirstName(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="lastName">Last Name</Label>
+                    <Input
+                      id="lastName"
+                      type="text"
+                      placeholder="Doe"
+                      value={lastName}
+                      onChange={(e) => setLastName(e.target.value)}
+                      required
+                    />
+                  </div>
+                </div>
+              )}
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
                 <Input
@@ -142,9 +203,11 @@ export default function AuthPage() {
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="password">Password</Label>
-                  <a href="#" className="text-xs text-primary font-medium hover:underline">
-                    Forgot password?
-                  </a>
+                  {mode === "login" && (
+                    <Link href="/forgot-password" className="text-xs text-primary font-medium hover:underline">
+                      Forgot password?
+                    </Link>
+                  )}
                 </div>
                 <Input
                   id="password"
@@ -156,16 +219,35 @@ export default function AuthPage() {
               </div>
               <Button type="submit" className="w-full" disabled={isLoading}>
                 {isLoading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                Sign In
+                {mode === "login" ? "Sign In" : "Sign Up"}
               </Button>
             </form>
           </CardContent>
           <CardFooter className="flex justify-center border-t border-border pt-6">
             <p className="text-sm text-muted-foreground">
-              Don't have an account?{" "}
-              <Link href="/onboarding" className="text-primary font-medium hover:underline">
-                Start a free trial
-              </Link>
+              {mode === "login" ? (
+                <>
+                  Don't have an account?{" "}
+                  <button
+                    type="button"
+                    onClick={() => setMode("signup")}
+                    className="text-primary font-medium hover:underline"
+                  >
+                    Sign up
+                  </button>
+                </>
+              ) : (
+                <>
+                  Already have an account?{" "}
+                  <button
+                    type="button"
+                    onClick={() => setMode("login")}
+                    className="text-primary font-medium hover:underline"
+                  >
+                    Sign in
+                  </button>
+                </>
+              )}
             </p>
           </CardFooter>
         </Card>

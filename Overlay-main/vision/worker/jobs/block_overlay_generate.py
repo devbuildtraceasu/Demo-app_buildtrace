@@ -1,8 +1,17 @@
 """Block overlay generation job handler.
 
-This module handles the generation of overlay images between two blocks,
-using smart alignment selection (grid-based or SIFT-based) based on block
-metadata and merge-mode rendering for visual differentiation.
+This module handles the generation of overlay images between two blocks.
+
+Alignment Strategy:
+- SIFT (Scale-Invariant Feature Transform) is always used as the primary
+  alignment method. It's fast (~5-10 seconds) and works well for most cases.
+- If SIFT fails completely (e.g., not enough feature matches), Grid alignment
+  is attempted as a fallback using Gemini Vision API (~2-3 minutes).
+- SIFT results are always used regardless of confidence level - low confidence
+  alignments may produce suboptimal overlays but will not fail the job.
+
+Rendering:
+- Merge-mode rendering is used for visual differentiation between old/new blocks.
 """
 
 import gc
@@ -130,21 +139,9 @@ def _download_block_image(storage_client, uri: str) -> bytes:
     return data
 
 
-# Minimum SIFT inlier ratio to consider alignment successful
+# SIFT inlier ratio threshold for logging warnings (does not block alignment)
+# Alignments below this threshold will log a warning but still proceed
 SIFT_CONFIDENCE_THRESHOLD = 0.3
-
-
-def _has_grid_callouts(block_a: Block) -> bool:
-    """Check if block has grid callouts in metadata.
-
-    Args:
-        block_a: The source block (old) to check metadata
-
-    Returns:
-        True if block has grid callouts, False otherwise
-    """
-    metadata = block_a.metadata_ or {}
-    return metadata.get("has_grid_callouts", False)
 
 
 def _align_blocks(
@@ -152,29 +149,33 @@ def _align_blocks(
     img_b: np.ndarray,
     path_a: Path | None,
     path_b: Path | None,
-    has_grid: bool = False,
+    _has_grid: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, AlignmentStats]:
-    """Align two block images using SIFT-first strategy with Grid fallback.
+    """Align two block images using SIFT alignment with Grid fallback.
 
-    Strategy:
-    1. Try SIFT alignment first
-    2. If SIFT fails or has low confidence (inlier_ratio < 0.3), try Grid
-    3. If Grid also fails, use SIFT result (or raise error if both fail)
+    Alignment Strategy:
+    1. SIFT alignment is always attempted first (~5-10 seconds)
+    2. SIFT results are always used if successful, regardless of confidence
+    3. If SIFT fails completely (RuntimeError), Grid fallback is attempted
+    4. Grid alignment uses Gemini Vision API (~2-3 minutes) to detect grid lines
+    5. If both methods fail, the original SIFT error is raised
+
+    Note: Low confidence SIFT alignments (inlier_ratio < 0.3) will log a warning
+    but still proceed. This may result in suboptimal overlays for difficult cases.
 
     Args:
         img_a: Image A in RGB format (old/source)
         img_b: Image B in RGB format (new/target)
-        path_a: Path to image A file (required for grid alignment)
-        path_b: Path to image B file (required for grid alignment)
-        has_grid: Whether block has grid callouts (enables grid fallback)
+        path_a: Path to image A file (required for grid alignment fallback)
+        path_b: Path to image B file (required for grid alignment fallback)
+        _has_grid: Unused, kept for API compatibility
 
     Returns:
-        (aligned_a, aligned_b, stats)
+        (aligned_a, aligned_b, stats) - AlignmentStats contains method used
 
     Raises:
-        RuntimeError: If alignment fails completely
+        RuntimeError: If all alignment methods fail
     """
-    sift_result = None
     sift_error = None
 
     # Step 1: Try SIFT alignment first (primary method)
@@ -195,37 +196,33 @@ def _align_blocks(
             contrast_threshold=0.02,
             expand_canvas=True,
         )
-        logger.debug(
-            "[alignment.sift] scale=%.4f rotation=%.2f inlier_ratio=%.2f",
+
+        logger.info(
+            "[alignment.sift] scale=%.4f rotation=%.2f inlier_ratio=%.2f inliers=%d",
             stats.scale,
             stats.rotation_deg,
             stats.inlier_ratio,
+            stats.inlier_count,
         )
 
-        # Check if SIFT confidence is acceptable
-        if stats.inlier_ratio >= SIFT_CONFIDENCE_THRESHOLD:
-            logger.info(
-                "[alignment.sift.success] inlier_ratio=%.2f (threshold=%.2f)",
+        # SIFT succeeded - return result (even if low confidence)
+        if stats.inlier_ratio < SIFT_CONFIDENCE_THRESHOLD:
+            logger.warning(
+                "[alignment.sift.low_confidence] inlier_ratio=%.2f < threshold=%.2f (proceeding anyway)",
                 stats.inlier_ratio,
                 SIFT_CONFIDENCE_THRESHOLD,
             )
-            return aligned_a, aligned_b, stats
 
-        # SIFT succeeded but low confidence - save result for potential fallback
-        sift_result = (aligned_a, aligned_b, stats)
-        logger.debug(
-            "[alignment.sift.low_confidence] inlier_ratio=%.2f < threshold=%.2f",
-            stats.inlier_ratio,
-            SIFT_CONFIDENCE_THRESHOLD,
-        )
+        return aligned_a, aligned_b, stats
 
     except RuntimeError as e:
         sift_error = e
-        logger.debug("[alignment.sift.failed] error=%s", str(e))
+        logger.warning("[alignment.sift.failed] %s - trying grid fallback", str(e))
 
-    # Step 2: Try Grid alignment as fallback (if block has grid callouts)
-    if has_grid and path_a is not None and path_b is not None:
+    # Step 2: Try Grid alignment as fallback (if paths available)
+    if path_a is not None and path_b is not None:
         try:
+            logger.info("[alignment.grid] Starting grid alignment fallback...")
             result = align_with_grid(img_a, img_b, path_a, path_b)
             if result[0] is not None:
                 aligned_a, aligned_b, stats = result
@@ -236,23 +233,14 @@ def _align_blocks(
                 )
                 return aligned_a, aligned_b, stats
 
-            logger.debug("[alignment.grid.failed] insufficient grid lines")
+            logger.warning("[alignment.grid.failed] insufficient grid lines")
         except RuntimeError as e:
             # Gemini API errors should fail the job immediately
             if "Gemini API" in str(e) or "GEMINI_API_KEY" in str(e):
                 raise
-            logger.debug("[alignment.grid.failed] error=%s", str(e))
-    elif has_grid:
-        logger.debug("[alignment.grid.skipped] missing image file paths")
-
-    # Step 3: Return SIFT result if we have one (even with low confidence)
-    if sift_result is not None:
-        aligned_a, aligned_b, stats = sift_result
-        logger.warning(
-            "[alignment.fallback] using low-confidence SIFT result (inlier_ratio=%.2f)",
-            stats.inlier_ratio,
-        )
-        return aligned_a, aligned_b, stats
+            logger.warning("[alignment.grid.failed] %s", str(e))
+    else:
+        logger.warning("[alignment.grid.skipped] missing image file paths for grid fallback")
 
     # Both methods failed
     if sift_error:
@@ -280,21 +268,17 @@ def _generate_overlay_assets(
     Raises:
         RuntimeError: If alignment fails
     """
-    # Check if block has grid callouts for potential Grid fallback
-    has_grid = _has_grid_callouts(block_a)
-
-    # For grid fallback, write bytes to temp files (avoid re-encoding)
+    # Always write temp files for potential Grid fallback when SIFT fails
     path_a: Path | None = None
     path_b: Path | None = None
 
-    if has_grid:
-        # Write PNG bytes directly - may be needed for Grid fallback
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f_a:
-            path_a = Path(f_a.name)
-            f_a.write(img_a_bytes)
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f_b:
-            path_b = Path(f_b.name)
-            f_b.write(img_b_bytes)
+    # Write PNG bytes directly - needed for Grid fallback
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f_a:
+        path_a = Path(f_a.name)
+        f_a.write(img_a_bytes)
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f_b:
+        path_b = Path(f_b.name)
+        f_b.write(img_b_bytes)
 
     # Decode images to numpy arrays
     img_a = _load_image_from_bytes(img_a_bytes)

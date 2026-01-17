@@ -8,17 +8,18 @@ import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
-import { 
-  ZoomIn, 
-  ZoomOut, 
-  Move, 
-  Layers, 
-  Download, 
+import {
+  ZoomIn,
+  ZoomOut,
+  Move,
+  Layers,
+  Download,
   Share2,
   Filter,
   DollarSign,
@@ -36,7 +37,10 @@ import {
   Bot,
   Loader2,
   BarChart3,
-  AlertCircle
+  AlertCircle,
+  Copy,
+  Check,
+  Link as LinkIcon
 } from "lucide-react";
 import blueprint from "@assets/generated_images/architectural_floor_plan_blueprint.png";
 import React, { useState, useMemo } from "react";
@@ -67,6 +71,8 @@ import {
 import { useComparison, useChanges, useUpdateChange, useCreateChange, useCreateComparison } from "@/hooks/use-comparison";
 import { useManualAlignment, createInitialAlignmentState, addAlignmentPoint, resetAlignmentPoints, type Point as AlignmentPoint } from "@/hooks/use-alignment";
 import { useDrawingStatus } from "@/hooks/use-drawings";
+import { useQuery } from "@tanstack/react-query";
+import { useImageTransform } from "@/hooks/use-image-transform";
 import type { Change } from "@/lib/api";
 import api from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
@@ -85,12 +91,13 @@ const MOCK_CHANGES = [
 ];
 
 export default function OverlayViewer() {
-  // Get project ID from URL params and query params
-  const params = useParams<{ id: string }>();
+  // Get project ID and comparison ID from URL params (prefer path param over query param)
+  const params = useParams<{ id: string; comparisonId?: string }>();
   const projectId = params.id;
   const searchString = useSearch();
   const searchParams = new URLSearchParams(searchString);
-  const comparisonId = searchParams.get('comparison');
+  // Prefer comparison ID from path param, fallback to query param for backward compatibility
+  const comparisonId = params.comparisonId || searchParams.get('comparison');
   const sourceDrawingId = searchParams.get('source_drawing');
   const targetDrawingId = searchParams.get('target_drawing');
   
@@ -113,6 +120,98 @@ export default function OverlayViewer() {
   const { data: apiChanges, isLoading: changesLoading } = useChanges(comparisonId || undefined);
   const updateChangeMutation = useUpdateChange();
   const createChangeMutation = useCreateChange(comparisonId || '');
+
+  // Fetch all blocks to find the specific ones for side-by-side view
+  // Note: The API incorrectly returns block_a_id as drawing_a_id and block_b_id as drawing_b_id
+  // So we use drawing_a_id and drawing_b_id as block IDs
+  const { data: allBlocks } = useQuery({
+    queryKey: ['all-blocks'],
+    queryFn: () => api.blocks.listAll(),
+    enabled: !!comparison,
+  });
+  
+  // Helper to convert S3 URI to download URL
+  const convertS3UriToUrl = (uri: string | undefined): string | null => {
+    if (!uri) return null;
+    // If already a full URL, return as-is
+    if (uri.startsWith('http://') || uri.startsWith('https://')) {
+      return uri;
+    }
+    // Convert s3:// URI to MinIO URL (local dev)
+    if (uri.startsWith('s3://')) {
+      const path = uri.replace('s3://overlay-uploads/', '');
+      return `http://localhost:9000/overlay-uploads/${path}`;
+    }
+    return uri;
+  };
+
+  // Fetch all drawings for the project to get their sheets
+  const { data: projectDrawings } = useQuery({
+    queryKey: ['project', projectId, 'drawings'],
+    queryFn: () => api.drawings.listByProject(projectId!),
+    enabled: !!projectId,
+  });
+
+  // Fetch all sheets to get sheet names for display
+  const { data: allSheets } = useQuery({
+    queryKey: ['all-sheets-for-overlay', projectId, projectDrawings],
+    queryFn: async () => {
+      if (!projectDrawings || projectDrawings.length === 0) return [];
+      
+      // Fetch all sheets for all drawings in the project
+      const sheetsPromises = projectDrawings.map(drawing => 
+        api.drawings.getSheets(drawing.id).catch(() => [])
+      );
+      const sheetsArrays = await Promise.all(sheetsPromises);
+      return sheetsArrays.flat();
+    },
+    enabled: !!projectId && !!projectDrawings && projectDrawings.length > 0,
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+  });
+
+  // Create sheet map
+  const sheetMap = useMemo(() => {
+    if (!allSheets) return {};
+    const map: Record<string, { sheet_number?: string; title?: string; name?: string }> = {};
+    allSheets.forEach(sheet => {
+      map[sheet.id] = {
+        sheet_number: sheet.sheet_number,
+        title: sheet.title,
+        name: sheet.sheet_number || sheet.title || 'Sheet',
+      };
+    });
+    return map;
+  }, [allSheets]);
+
+  // Get the actual block images for side-by-side view
+  // The comparison.drawing_a_id and drawing_b_id are actually block IDs (API bug)
+  const sourceBlock = useMemo(() => {
+    if (!comparison?.drawing_a_id || !allBlocks) return null;
+    const block = allBlocks.find(b => b.id === comparison.drawing_a_id);
+    if (!block) return null;
+    
+    const sheetInfo = block.sheet_id ? sheetMap[block.sheet_id] : null;
+    const sheetName = sheetInfo?.name || 'Sheet A';
+    
+    if (block.uri) {
+      return { ...block, uri: convertS3UriToUrl(block.uri) || block.uri, sheetName };
+    }
+    return { ...block, sheetName };
+  }, [comparison?.drawing_a_id, allBlocks, sheetMap]);
+  
+  const targetBlock = useMemo(() => {
+    if (!comparison?.drawing_b_id || !allBlocks) return null;
+    const block = allBlocks.find(b => b.id === comparison.drawing_b_id);
+    if (!block) return null;
+    
+    const sheetInfo = block.sheet_id ? sheetMap[block.sheet_id] : null;
+    const sheetName = sheetInfo?.name || 'Sheet B';
+    
+    if (block.uri) {
+      return { ...block, uri: convertS3UriToUrl(block.uri) || block.uri, sheetName };
+    }
+    return { ...block, sheetName };
+  }, [comparison?.drawing_b_id, allBlocks, sheetMap]);
 
   // AI Analysis state - must be declared before changes memo
   const [aiDetectedChanges, setAiDetectedChanges] = useState<Array<{
@@ -148,6 +247,7 @@ export default function OverlayViewer() {
         trade: c.trade || 'General',
         status: 'Open',
         assignee: 'Unassigned',
+        bounds: undefined, // AI changes may not have bounds initially
       }));
     }
     // Fall back to API changes from comparison endpoint
@@ -163,11 +263,128 @@ export default function OverlayViewer() {
         trade: c.trade || 'General',
         status: c.status === 'open' ? 'Open' : c.status === 'in_review' ? 'In Review' : c.status,
         assignee: c.assignee || 'Unassigned',
+        bounds: c.bounds, // Include bounds from API
       }));
     }
     // Return empty array when no changes detected
     return [];
   }, [apiChanges, aiDetectedChanges]);
+
+  // Helper function to parse cost string to number
+  const parseCost = (costStr: string): number => {
+    const match = costStr.match(/-?\$?([\d,]+)/);
+    if (!match) return 0;
+    return parseFloat(match[1].replace(/,/g, ''));
+  };
+
+  // Filter state - declared before filteredChanges useMemo to avoid TDZ
+  const [showFilters, setShowFilters] = useState(false);
+  const [filters, setFilters] = useState<{
+    status: string[];
+    trade: string[];
+    discipline: string[];
+    costMin?: number;
+    costMax?: number;
+  }>({
+    status: [],
+    trade: [],
+    discipline: [],
+  });
+
+  // Apply filters to changes
+  const filteredChanges = useMemo(() => {
+    let filtered = [...changes];
+
+    // Filter by status
+    if (filters.status.length > 0) {
+      filtered = filtered.filter(c =>
+        filters.status.includes(c.status.toLowerCase().replace(' ', '_'))
+      );
+    }
+
+    // Filter by trade
+    if (filters.trade.length > 0) {
+      filtered = filtered.filter(c =>
+        filters.trade.includes(c.trade)
+      );
+    }
+
+    // Filter by discipline
+    if (filters.discipline.length > 0) {
+      filtered = filtered.filter(c =>
+        filters.discipline.includes(c.discipline)
+      );
+    }
+
+    // Filter by cost range
+    if (filters.costMin !== undefined || filters.costMax !== undefined) {
+      filtered = filtered.filter(c => {
+        const cost = parseCost(c.cost);
+        if (filters.costMin !== undefined && cost < filters.costMin) return false;
+        if (filters.costMax !== undefined && cost > filters.costMax) return false;
+        return true;
+      });
+    }
+
+    return filtered;
+  }, [changes, filters]);
+
+  // Get unique values for filter options
+  const filterOptions = useMemo(() => {
+    const trades = new Set<string>();
+    const disciplines = new Set<string>();
+
+    changes.forEach(c => {
+      if (c.trade) trades.add(c.trade);
+      if (c.discipline) disciplines.add(c.discipline);
+    });
+
+    return {
+      trades: Array.from(trades).sort(),
+      disciplines: Array.from(disciplines).sort(),
+    };
+  }, [changes]);
+
+  // Clear all filters
+  const clearFilters = () => {
+    setFilters({
+      status: [],
+      trade: [],
+      discipline: [],
+    });
+  };
+
+  // Check if any filters are active
+  const hasActiveFilters = filters.status.length > 0 ||
+                          filters.trade.length > 0 ||
+                          filters.discipline.length > 0 ||
+                          filters.costMin !== undefined ||
+                          filters.costMax !== undefined;
+
+  // Helper function to convert bounds to percentage positioning
+  const boundsToPosition = (bounds: { xmin: number; ymin: number; xmax: number; ymax: number } | undefined, index: number) => {
+    if (!bounds) {
+      // Fallback to distributed positioning if no bounds available
+      return {
+        top: `${20 + (index * 12)}%`,
+        left: `${25 + (index * 12)}%`,
+      };
+    }
+    // Convert bounds (assumed to be in normalized 0-1 range or pixel coordinates)
+    // to percentage for positioning. Center the marker on the bounds.
+    const centerX = (bounds.xmin + bounds.xmax) / 2;
+    const centerY = (bounds.ymin + bounds.ymax) / 2;
+
+    // If bounds are in 0-1 range, convert to percentage
+    const isNormalized = bounds.xmax <= 1 && bounds.ymax <= 1;
+    const x = isNormalized ? centerX * 100 : (centerX / 1000) * 100;
+    const y = isNormalized ? centerY * 100 : (centerY / 1000) * 100;
+
+    return {
+      top: `${Math.max(5, Math.min(95, y))}%`,
+      left: `${Math.max(5, Math.min(95, x))}%`,
+    };
+  };
 
   // Overlay image - use API data if available
   const overlayImage = comparison?.overlay_uri || blueprint;
@@ -179,8 +396,12 @@ export default function OverlayViewer() {
   const [showAddDialog, setShowAddDialog] = useState(false);
   
   // Determine comparison status - use actual API status
-  const isProcessing = comparison?.status === 'processing';
-  const isCompleted = comparison?.status === 'completed';
+  // Consider 'pending' and 'processing' as still processing
+  // Also consider 'completed' without overlay_uri as still processing (job finished but URI not set yet)
+  const isProcessing = comparison?.status === 'processing' ||
+                       comparison?.status === 'pending' ||
+                       (comparison?.status === 'completed' && !comparison?.overlay_uri);
+  const isCompleted = comparison?.status === 'completed' && !!comparison?.overlay_uri;
   const isFailed = comparison?.status === 'failed';
   
   // Show changes when comparison is completed and we have the overlay
@@ -202,11 +423,25 @@ export default function OverlayViewer() {
     { role: 'assistant', content: 'Hello! I\'m your BuildTrace AI assistant. I can help you analyze drawings, understand changes, or answer questions about your project. What would you like to know?' }
   ]);
   const [chatInput, setChatInput] = useState('');
-  
+
   // AI Analysis state
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const queryClient = useQueryClient();
+
+  // Image transform (pan/zoom) hook
+  const {
+    transform,
+    zoomIn: handleZoomIn,
+    zoomOut: handleZoomOut,
+    resetTransform,
+    panMode,
+    togglePanMode,
+    handleMouseDown,
+    handleMouseMove,
+    handleMouseUp,
+    getTransformStyle,
+  } = useImageTransform();
   
   // Function to run AI change detection
   const runAIAnalysis = async () => {
@@ -300,10 +535,238 @@ export default function OverlayViewer() {
   }, [comparison?.id]);
 
   const activeChange = changes.find(c => c.id === activeChangeId);
+  const activeChangeFromAPI = apiChanges?.find(c => c.id === activeChangeId);
+
+  // Form state for editing change details
+  const [editedChange, setEditedChange] = useState<{
+    description?: string;
+    estimated_cost?: string;
+    schedule_impact?: string;
+    status?: string;
+    assignee?: string;
+  }>({});
+
+  // Reset form when active change changes
+  React.useEffect(() => {
+    if (activeChangeFromAPI) {
+      setEditedChange({
+        description: activeChangeFromAPI.description,
+        estimated_cost: activeChangeFromAPI.estimated_cost,
+        schedule_impact: activeChangeFromAPI.schedule_impact,
+        status: activeChangeFromAPI.status,
+        assignee: activeChangeFromAPI.assignee,
+      });
+    }
+  }, [activeChangeFromAPI]);
 
   const handleSelectChange = (id: string) => {
     setActiveChangeId(id);
     setIsSheetOpen(true);
+  };
+
+  const handleSaveChange = async () => {
+    if (!activeChangeId || !activeChangeFromAPI) return;
+
+    try {
+      await updateChangeMutation.mutateAsync({
+        changeId: activeChangeId,
+        data: {
+          description: editedChange.description,
+          estimated_cost: editedChange.estimated_cost,
+          schedule_impact: editedChange.schedule_impact,
+          status: editedChange.status,
+          assignee: editedChange.assignee,
+        },
+      });
+
+      toast({
+        title: "Change Updated",
+        description: "The change details have been saved successfully.",
+      });
+
+      // Invalidate queries to refresh the data
+      queryClient.invalidateQueries({ queryKey: ['changes', comparisonId] });
+
+      setIsSheetOpen(false);
+    } catch (error) {
+      toast({
+        title: "Save Failed",
+        description: error instanceof Error ? error.message : "Failed to save changes",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // State for new change form
+  const [newChange, setNewChange] = useState<{
+    type: 'added' | 'removed' | 'modified';
+    title: string;
+    description: string;
+    estimated_cost: string;
+    schedule_impact: string;
+    status: string;
+    trade?: string;
+    discipline?: string;
+  }>({
+    type: 'added',
+    title: '',
+    description: '',
+    estimated_cost: '',
+    schedule_impact: '',
+    status: 'open',
+  });
+
+  const handleCreateChange = async () => {
+    if (!comparisonId || !newChange.title.trim()) {
+      toast({
+        title: "Validation Error",
+        description: "Please provide at least a title for the change.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      await createChangeMutation.mutateAsync({
+        comparison_id: comparisonId,
+        type: newChange.type,
+        title: newChange.title,
+        description: newChange.description,
+        estimated_cost: newChange.estimated_cost,
+        schedule_impact: newChange.schedule_impact,
+        status: newChange.status,
+        trade: newChange.trade,
+        discipline: newChange.discipline,
+      });
+
+      toast({
+        title: "Change Created",
+        description: "The new change has been added successfully.",
+      });
+
+      // Reset form
+      setNewChange({
+        type: 'added',
+        title: '',
+        description: '',
+        estimated_cost: '',
+        schedule_impact: '',
+        status: 'open',
+      });
+
+      // Invalidate queries to refresh the data
+      queryClient.invalidateQueries({ queryKey: ['changes', comparisonId] });
+
+      setShowAddDialog(false);
+      setIsAddingChange(false);
+    } catch (error) {
+      toast({
+        title: "Create Failed",
+        description: error instanceof Error ? error.message : "Failed to create change",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Export functionality
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [exportFormat, setExportFormat] = useState<'pdf' | 'excel'>('pdf');
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleExport = async () => {
+    setIsExporting(true);
+
+    try {
+      if (exportFormat === 'excel') {
+        // Export to CSV (simpler than full Excel)
+        const csvContent = generateCSV();
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', `changes-${comparisonId || 'export'}.csv`);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        toast({
+          title: "Export Successful",
+          description: "Changes have been exported to CSV.",
+        });
+      } else {
+        // PDF export - would require a backend endpoint
+        toast({
+          title: "PDF Export",
+          description: "PDF export is not yet implemented. Please use CSV export for now.",
+          variant: "destructive",
+        });
+      }
+
+      setShowExportDialog(false);
+    } catch (error) {
+      toast({
+        title: "Export Failed",
+        description: error instanceof Error ? error.message : "Failed to export data",
+        variant: "destructive",
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const generateCSV = () => {
+    const headers = ['#', 'Type', 'Title', 'Discipline', 'Trade', 'Cost', 'Schedule', 'Status', 'Assignee'];
+    const rows = filteredChanges.map((change, i) => [
+      (i + 1).toString(),
+      change.type,
+      change.title,
+      change.discipline,
+      change.trade,
+      change.cost,
+      change.schedule,
+      change.status,
+      change.assignee,
+    ]);
+
+    const csvRows = [
+      headers.join(','),
+      ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
+    ];
+
+    return csvRows.join('\n');
+  };
+
+  // Share functionality
+  const [showShareDialog, setShowShareDialog] = useState(false);
+  const [shareLink, setShareLink] = useState('');
+  const [linkCopied, setLinkCopied] = useState(false);
+
+  const handleShare = () => {
+    // Generate shareable link with comparison ID
+    const baseUrl = window.location.origin;
+    const link = `${baseUrl}/project/${projectId}/overlay/${comparisonId}?view=readonly`;
+    setShareLink(link);
+    setShowShareDialog(true);
+    setLinkCopied(false);
+  };
+
+  const copyShareLink = async () => {
+    try {
+      await navigator.clipboard.writeText(shareLink);
+      setLinkCopied(true);
+      toast({
+        title: "Link Copied!",
+        description: "The shareable link has been copied to your clipboard.",
+      });
+      setTimeout(() => setLinkCopied(false), 3000);
+    } catch (error) {
+      toast({
+        title: "Copy Failed",
+        description: "Could not copy link. Please copy it manually.",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleAlignmentClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -381,8 +844,8 @@ export default function OverlayViewer() {
         sheet_b_id: selectedTargetBlock,
       });
       
-      // Navigate to the comparison view with the new comparison ID
-      window.location.href = `/project/${projectId}/overlay?comparison=${result.id}`;
+      // Navigate to the comparison view with the new comparison ID in path
+      window.location.href = `/project/${projectId}/overlay/${result.id}`;
     } catch (error) {
       toast({
         title: "Failed to Start Overlay",
@@ -392,9 +855,9 @@ export default function OverlayViewer() {
     }
   };
 
-  // Filter to get only Plan blocks (for overlay comparison)
-  const sourceBlocks = sourceStatus?.blocks?.filter(b => b.type === 'Plan') || [];
-  const targetBlocks = targetStatus?.blocks?.filter(b => b.type === 'Plan') || [];
+  // Get all blocks (not just Plan blocks) for overlay comparison
+  const sourceBlocks = sourceStatus?.blocks || [];
+  const targetBlocks = targetStatus?.blocks || [];
 
   return (
     <DashboardLayout>
@@ -421,7 +884,7 @@ export default function OverlayViewer() {
                     </CardTitle>
                     <CardDescription>
                       {sourceStatus?.status === 'completed' 
-                        ? `${sourceBlocks.length} Plan blocks found` 
+                        ? `${sourceBlocks.length} block${sourceBlocks.length !== 1 ? 's' : ''} found` 
                         : sourceStatus?.status === 'processing' || sourceStatus?.status === 'pending'
                         ? 'Extracting blocks...'
                         : 'Waiting for processing...'}
@@ -462,7 +925,7 @@ export default function OverlayViewer() {
                     )}
                     
                     {sourceStatus?.status === 'completed' && sourceBlocks.length === 0 && (
-                      <p className="text-sm text-muted-foreground">No Plan blocks found in this drawing.</p>
+                      <p className="text-sm text-muted-foreground">No blocks found in this drawing.</p>
                     )}
                   </CardContent>
                 </Card>
@@ -517,7 +980,7 @@ export default function OverlayViewer() {
                     )}
                     
                     {targetStatus?.status === 'completed' && targetBlocks.length === 0 && (
-                      <p className="text-sm text-muted-foreground">No Plan blocks found in this drawing.</p>
+                      <p className="text-sm text-muted-foreground">No blocks found in this drawing.</p>
                     )}
                   </CardContent>
                 </Card>
@@ -553,15 +1016,64 @@ export default function OverlayViewer() {
         <div className="h-14 border-b border-border bg-background px-4 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-4">
              <div className="flex items-center gap-2">
-               <span className="font-bold text-sm">A-101 First Floor Plan</span>
+               <span className="font-bold text-sm">
+                 {comparison ? (
+                   sourceBlock && targetBlock ? (
+                     `${sourceBlock.sheetName || 'Sheet A'} vs ${targetBlock.sheetName || 'Sheet B'}`
+                   ) : 'A-101 First Floor Plan'
+                 ) : 'A-101 First Floor Plan'}
+               </span>
+               {comparisonId && (
+                 <Badge variant="secondary" className="text-[10px] h-5 font-mono">
+                   ID: {comparisonId.slice(0, 8)}
+                 </Badge>
+               )}
                <Badge variant="outline" className="text-[10px] h-5">{viewMode === "overlay" ? "Overlay" : "Side-by-Side"}</Badge>
              </div>
              <div className="h-4 w-[1px] bg-border" />
              <div className="flex items-center gap-1 bg-muted/50 p-1 rounded-md">
-                <Button variant="ghost" size="icon" className="h-7 w-7"><ZoomIn className="w-4 h-4" /></Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7"><ZoomOut className="w-4 h-4" /></Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7"><Move className="w-4 h-4" /></Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={handleZoomIn}
+                  title="Zoom In (or scroll up)"
+                >
+                  <ZoomIn className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={handleZoomOut}
+                  title="Zoom Out (or scroll down)"
+                >
+                  <ZoomOut className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant={panMode ? "default" : "ghost"}
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={togglePanMode}
+                  title="Toggle Pan Mode"
+                >
+                  <Move className="w-4 h-4" />
+                </Button>
              </div>
+             <div className="h-4 w-[1px] bg-border" />
+
+             {/* Reset Transform Button */}
+             {(transform.scale !== 1 || transform.translateX !== 0 || transform.translateY !== 0) && (
+               <Button
+                 variant="ghost"
+                 size="sm"
+                 className="h-7 gap-1 text-xs"
+                 onClick={resetTransform}
+                 title="Reset zoom and pan"
+               >
+                 <RotateCcw className="w-3 h-3" /> Reset View
+               </Button>
+             )}
              <div className="h-4 w-[1px] bg-border" />
              
              {/* Manual Alignment */}
@@ -633,10 +1145,21 @@ export default function OverlayViewer() {
               </TabsList>
             </Tabs>
             <div className="h-4 w-[1px] bg-border mx-2" />
-            <Button variant="outline" size="sm" className="h-8 gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 gap-2"
+              onClick={() => setShowExportDialog(true)}
+              disabled={filteredChanges.length === 0}
+            >
               <Download className="w-3 h-3" /> Export
             </Button>
-            <Button size="sm" className="h-8 gap-2">
+            <Button
+              size="sm"
+              className="h-8 gap-2"
+              onClick={handleShare}
+              disabled={!comparisonId}
+            >
               <Share2 className="w-3 h-3" /> Share
             </Button>
           </div>
@@ -751,32 +1274,40 @@ export default function OverlayViewer() {
                   </div>
                 )}
 
-                <div className={`flex-1 flex items-center justify-center p-8 ${alignmentMode ? 'cursor-crosshair' : ''}`}>
-                  <div className={`relative shadow-2xl max-w-full max-h-full aspect-[4/3] bg-white ${isAddingChange ? 'cursor-crosshair' : ''}`}>
-                    <img 
-                      src={overlayImage} 
-                      alt="Overlay Comparison" 
-                      className="w-full h-full object-contain opacity-60"
+                <div
+                  className={`flex-1 flex items-center justify-center p-8 overflow-hidden ${alignmentMode ? 'cursor-crosshair' : ''}`}
+                  onMouseDown={handleMouseDown}
+                  onMouseMove={handleMouseMove}
+                  onMouseUp={handleMouseUp}
+                  onMouseLeave={handleMouseUp}
+                >
+                  <div
+                    className={`relative shadow-2xl max-w-full max-h-full aspect-[4/3] bg-white ${isAddingChange ? 'cursor-crosshair' : ''}`}
+                    style={getTransformStyle()}
+                  >
+                    <img
+                      src={overlayImage}
+                      alt="Overlay Comparison"
+                      className="w-full h-full object-contain opacity-60 pointer-events-none"
                     />
                     
-                    {/* Change Markers - only show when changes detected */}
-                    {showChanges && changes.map((change, i) => {
+                    {/* Change Markers - only show filtered changes */}
+                    {showChanges && filteredChanges.map((change, i) => {
                       const colors = getChangeColor(change.type);
+                      const position = boundsToPosition(change.bounds, i);
+                      const originalIndex = changes.indexOf(change) + 1;
                       return (
-                        <div 
+                        <div
                           key={change.id}
                           onClick={(e) => { e.stopPropagation(); handleSelectChange(change.id); }}
                           className={`
-                            absolute w-12 h-12 border-2 rounded-full flex items-center justify-center cursor-pointer hover:scale-110 transition-transform z-10 shadow-lg
+                            absolute w-12 h-12 border-2 rounded-full flex items-center justify-center cursor-pointer hover:scale-110 transition-transform z-10 shadow-lg -translate-x-1/2 -translate-y-1/2
                             ${activeChangeId === change.id ? 'ring-4 ring-primary/20 scale-110' : ''}
                             ${colors.border} ${colors.bg} ${colors.text}
                           `}
-                          style={{ 
-                            top: `${20 + (i * 12)}%`, 
-                            left: `${25 + (i * 12)}%` 
-                          }}
+                          style={position}
                         >
-                          <span className="font-bold text-xs">{i + 1}</span>
+                          <span className="font-bold text-xs">{originalIndex}</span>
                         </div>
                       );
                     })}
@@ -811,42 +1342,88 @@ export default function OverlayViewer() {
               <div className="w-full h-full flex">
                 <div className="flex-1 border-r border-border bg-muted/10 relative flex flex-col">
                   <div className="h-8 bg-muted/30 border-b border-border flex items-center justify-center">
-                    <span className="text-xs font-medium text-muted-foreground">Previous Revision (Rev 0)</span>
+                    <span className="text-xs font-medium text-muted-foreground">
+                      Previous Revision {sourceBlock ? `(${sourceBlock.type || 'Block'})` : '(Rev 0)'}
+                    </span>
                   </div>
                   <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
-                    <div className="relative max-w-full max-h-full bg-white shadow-lg">
-                      <img src={blueprint} alt="Old Drawing" className="w-full h-full object-contain opacity-70" />
-                      {showChanges && changes.filter(c => c.type === 'deleted').map((change, i) => (
-                        <div 
-                          key={change.id}
-                          onClick={() => handleSelectChange(change.id)}
-                          className="absolute w-10 h-10 border-2 border-red-500 bg-red-500/20 rounded-full flex items-center justify-center cursor-pointer hover:scale-110 transition-transform"
-                          style={{ top: `${25 + (i * 20)}%`, left: `${30 + (i * 15)}%` }}
-                        >
-                          <span className="font-bold text-xs text-red-600">{changes.indexOf(change) + 1}</span>
-                        </div>
-                      ))}
-                    </div>
+                    {sourceBlock?.uri ? (
+                      <div className="relative max-w-full max-h-full bg-white shadow-lg">
+                        <img 
+                          src={sourceBlock.uri} 
+                          alt={sourceBlock.description || "Previous Drawing"} 
+                          className="w-full h-full object-contain opacity-70" 
+                        />
+                        {showChanges && filteredChanges.filter(c => c.type === 'deleted').map((change) => {
+                          const position = boundsToPosition(change.bounds, changes.indexOf(change));
+                          const originalIndex = changes.indexOf(change) + 1;
+                          return (
+                            <div
+                              key={change.id}
+                              onClick={() => handleSelectChange(change.id)}
+                              className="absolute w-10 h-10 border-2 border-red-500 bg-red-500/20 rounded-full flex items-center justify-center cursor-pointer hover:scale-110 transition-transform -translate-x-1/2 -translate-y-1/2"
+                              style={position}
+                            >
+                              <span className="font-bold text-xs text-red-600">{originalIndex}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-center h-full text-muted-foreground">
+                        {comparisonLoading ? (
+                          <div className="text-center">
+                            <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2" />
+                            <p className="text-sm">Loading drawing...</p>
+                          </div>
+                        ) : (
+                          <p className="text-sm">No image available</p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="flex-1 bg-muted/10 relative flex flex-col">
                   <div className="h-8 bg-muted/30 border-b border-border flex items-center justify-center">
-                    <span className="text-xs font-medium text-muted-foreground">Current Revision (Rev 1)</span>
+                    <span className="text-xs font-medium text-muted-foreground">
+                      Current Revision {targetBlock ? `(${targetBlock.type || 'Block'})` : '(Rev 1)'}
+                    </span>
                   </div>
                   <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
-                    <div className="relative max-w-full max-h-full bg-white shadow-lg">
-                      <img src={blueprint} alt="New Drawing" className="w-full h-full object-contain" />
-                      {showChanges && changes.filter(c => c.type === 'new').map((change, i) => (
-                        <div 
-                          key={change.id}
-                          onClick={() => handleSelectChange(change.id)}
-                          className="absolute w-10 h-10 border-2 border-green-500 bg-green-500/20 rounded-full flex items-center justify-center cursor-pointer hover:scale-110 transition-transform"
-                          style={{ top: `${30 + (i * 18)}%`, left: `${35 + (i * 12)}%` }}
-                        >
-                          <span className="font-bold text-xs text-green-600">{changes.indexOf(change) + 1}</span>
-                        </div>
-                      ))}
-                    </div>
+                    {targetBlock?.uri ? (
+                      <div className="relative max-w-full max-h-full bg-white shadow-lg">
+                        <img 
+                          src={targetBlock.uri} 
+                          alt={targetBlock.description || "Current Drawing"} 
+                          className="w-full h-full object-contain" 
+                        />
+                        {showChanges && filteredChanges.filter(c => c.type === 'new').map((change) => {
+                          const position = boundsToPosition(change.bounds, changes.indexOf(change));
+                          const originalIndex = changes.indexOf(change) + 1;
+                          return (
+                            <div
+                              key={change.id}
+                              onClick={() => handleSelectChange(change.id)}
+                              className="absolute w-10 h-10 border-2 border-green-500 bg-green-500/20 rounded-full flex items-center justify-center cursor-pointer hover:scale-110 transition-transform -translate-x-1/2 -translate-y-1/2"
+                              style={position}
+                            >
+                              <span className="font-bold text-xs text-green-600">{originalIndex}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-center h-full text-muted-foreground">
+                        {comparisonLoading ? (
+                          <div className="text-center">
+                            <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2" />
+                            <p className="text-sm">Loading drawing...</p>
+                          </div>
+                        ) : (
+                          <p className="text-sm">No image available</p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -860,8 +1437,34 @@ export default function OverlayViewer() {
               {/* Change List Panel */}
               <ResizablePanel defaultSize={25} minSize={20} maxSize={40} className="bg-background border-l border-border flex flex-col">
                 <div className="p-4 border-b border-border flex items-center justify-between">
-                  <h3 className="font-semibold text-sm">Detected Changes</h3>
-                  <Button variant="ghost" size="icon" className="h-8 w-8"><Filter className="w-4 h-4" /></Button>
+                  <div>
+                    <h3 className="font-semibold text-sm">Detected Changes</h3>
+                    {hasActiveFilters && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Showing {filteredChanges.length} of {changes.length}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {hasActiveFilters && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={clearFilters}
+                        className="h-7 text-xs"
+                      >
+                        Clear
+                      </Button>
+                    )}
+                    <Button
+                      variant={hasActiveFilters ? "default" : "ghost"}
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => setShowFilters(true)}
+                    >
+                      <Filter className="w-4 h-4" />
+                    </Button>
+                  </div>
                 </div>
                 
                 <ScrollArea className="flex-1">
@@ -904,9 +1507,29 @@ export default function OverlayViewer() {
                         </div>
                       </div>
                     )}
-                    
+
+                    {/* No results after filtering */}
+                    {!isAnalyzing && changes.length > 0 && filteredChanges.length === 0 && (
+                      <div className="p-6 rounded-xl border-2 border-dashed border-border bg-muted/20">
+                        <div className="flex flex-col items-center text-center space-y-3">
+                          <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
+                            <Filter className="w-6 h-6 text-muted-foreground" />
+                          </div>
+                          <div>
+                            <h4 className="font-semibold text-sm mb-1">No Matches Found</h4>
+                            <p className="text-xs text-muted-foreground">
+                              Try adjusting your filters to see more results.
+                            </p>
+                          </div>
+                          <Button variant="outline" size="sm" onClick={clearFilters}>
+                            Clear Filters
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Changes List */}
-                    {changes.map((change, i) => {
+                    {filteredChanges.map((change, i) => {
                       const colors = getChangeColor(change.type);
                       return (
                         <div 
@@ -964,7 +1587,21 @@ export default function OverlayViewer() {
                 </ScrollArea>
 
                 <div className="p-4 border-t border-border bg-muted/10 space-y-2">
-                   <Button className="w-full gap-2" onClick={() => window.location.href = '/project/1/cost'}>
+                   <Button 
+                     className="w-full gap-2" 
+                     onClick={() => {
+                       if (comparisonId) {
+                         window.location.href = `/project/${projectId}/cost?comparison=${comparisonId}`;
+                       } else {
+                         toast({
+                           title: "No comparison available",
+                           description: "Please wait for the comparison to complete first.",
+                           variant: "destructive",
+                         });
+                       }
+                     }}
+                     disabled={!comparisonId}
+                   >
                      <BarChart3 className="w-4 h-4" /> Analyze Cost & Schedule Impact
                    </Button>
                    <Button 
@@ -1066,18 +1703,32 @@ export default function OverlayViewer() {
                 <div className="space-y-4">
                   <div className="space-y-2">
                     <Label>Description</Label>
-                    <Textarea defaultValue={activeChange.title} className="min-h-[80px]" />
+                    <Textarea
+                      value={editedChange.description || activeChange.title}
+                      onChange={(e) => setEditedChange(prev => ({ ...prev, description: e.target.value }))}
+                      className="min-h-[80px]"
+                    />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="p-4 rounded-lg bg-muted/30 border border-border">
                     <p className="text-xs text-muted-foreground mb-1">Estimated Cost</p>
-                    <Input defaultValue={activeChange.cost} className="h-8 text-lg font-bold" />
+                    <Input
+                      value={editedChange.estimated_cost || activeChange.cost}
+                      onChange={(e) => setEditedChange(prev => ({ ...prev, estimated_cost: e.target.value }))}
+                      className="h-8 text-lg font-bold"
+                      placeholder="$0"
+                    />
                   </div>
                   <div className="p-4 rounded-lg bg-muted/30 border border-border">
                      <p className="text-xs text-muted-foreground mb-1">Schedule Impact</p>
-                     <Input defaultValue={activeChange.schedule} className="h-8 text-lg font-bold" />
+                     <Input
+                       value={editedChange.schedule_impact || activeChange.schedule}
+                       onChange={(e) => setEditedChange(prev => ({ ...prev, schedule_impact: e.target.value }))}
+                       className="h-8 text-lg font-bold"
+                       placeholder="0 Days"
+                     />
                   </div>
                 </div>
 
@@ -1086,13 +1737,16 @@ export default function OverlayViewer() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                        <Label className="text-xs">Status</Label>
-                       <Select defaultValue={activeChange.status.toLowerCase().replace(" ", "-")}>
+                       <Select
+                         value={editedChange.status || activeChange.status.toLowerCase().replace(" ", "_")}
+                         onValueChange={(value) => setEditedChange(prev => ({ ...prev, status: value }))}
+                       >
                          <SelectTrigger>
                            <SelectValue placeholder="Status" />
                          </SelectTrigger>
                          <SelectContent>
                            <SelectItem value="open">Open</SelectItem>
-                           <SelectItem value="in-review">In Review</SelectItem>
+                           <SelectItem value="in_review">In Review</SelectItem>
                            <SelectItem value="pricing">Pricing</SelectItem>
                            <SelectItem value="closed">Closed</SelectItem>
                          </SelectContent>
@@ -1100,15 +1754,18 @@ export default function OverlayViewer() {
                     </div>
                     <div className="space-y-2">
                        <Label className="text-xs">Assignee</Label>
-                       <Select defaultValue={activeChange.assignee === "Unassigned" ? "unassigned" : "alex"}>
+                       <Select
+                         value={editedChange.assignee || (activeChange.assignee === "Unassigned" ? "unassigned" : "alex")}
+                         onValueChange={(value) => setEditedChange(prev => ({ ...prev, assignee: value === "unassigned" ? undefined : value }))}
+                       >
                          <SelectTrigger>
                            <SelectValue placeholder="Assignee" />
                          </SelectTrigger>
                          <SelectContent>
                            <SelectItem value="unassigned">Unassigned</SelectItem>
-                           <SelectItem value="alex">Alex Morgan</SelectItem>
-                           <SelectItem value="sarah">Sarah Chen</SelectItem>
-                           <SelectItem value="mike">Mike Ross</SelectItem>
+                           <SelectItem value="Alex Morgan">Alex Morgan</SelectItem>
+                           <SelectItem value="Sarah Chen">Sarah Chen</SelectItem>
+                           <SelectItem value="Mike Ross">Mike Ross</SelectItem>
                          </SelectContent>
                        </Select>
                     </div>
@@ -1146,8 +1803,20 @@ export default function OverlayViewer() {
                 </div>
 
                 <SheetFooter className="pt-4 border-t border-border">
-                  <Button className="w-full">
-                    <Save className="w-4 h-4 mr-2" /> Save Changes
+                  <Button
+                    className="w-full"
+                    onClick={handleSaveChange}
+                    disabled={updateChangeMutation.isPending}
+                  >
+                    {updateChangeMutation.isPending ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving...
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-4 h-4 mr-2" /> Save Changes
+                      </>
+                    )}
                   </Button>
                 </SheetFooter>
               </div>
@@ -1159,6 +1828,306 @@ export default function OverlayViewer() {
           </SheetContent>
         </Sheet>
 
+        {/* Share Dialog */}
+        <Dialog open={showShareDialog} onOpenChange={setShowShareDialog}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Share Comparison</DialogTitle>
+              <DialogDescription>
+                Share this comparison with a link. Anyone with the link can view the overlay and changes.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-3">
+                <Label className="text-sm font-semibold">Shareable Link</Label>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 p-3 rounded-lg bg-muted border border-border font-mono text-xs break-all">
+                    {shareLink}
+                  </div>
+                  <Button
+                    size="icon"
+                    variant={linkCopied ? "default" : "outline"}
+                    onClick={copyShareLink}
+                    className="shrink-0"
+                  >
+                    {linkCopied ? (
+                      <Check className="w-4 h-4" />
+                    ) : (
+                      <Copy className="w-4 h-4" />
+                    )}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="rounded-lg bg-blue-50 dark:bg-blue-950 p-4 space-y-2">
+                <div className="flex items-start gap-2">
+                  <LinkIcon className="w-4 h-4 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                      View-Only Access
+                    </p>
+                    <p className="text-xs text-blue-700 dark:text-blue-300">
+                      Recipients can view the comparison and changes but cannot edit or modify anything.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  This link includes:
+                </p>
+                <ul className="text-xs text-muted-foreground space-y-1 ml-4">
+                  <li>• Overlay comparison view</li>
+                  <li>• All detected changes ({changes.length} total)</li>
+                  <li>• Cost and schedule impacts</li>
+                  <li>• Change details and status</li>
+                </ul>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setShowShareDialog(false)}
+              >
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Export Dialog */}
+        <Dialog open={showExportDialog} onOpenChange={setShowExportDialog}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Export Changes</DialogTitle>
+              <DialogDescription>
+                Export the current list of changes to PDF or Excel format.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-3">
+                <Label className="text-sm font-semibold">Export Format</Label>
+                <div className="grid grid-cols-2 gap-4">
+                  <div
+                    onClick={() => setExportFormat('pdf')}
+                    className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
+                      exportFormat === 'pdf'
+                        ? 'border-primary bg-primary/5'
+                        : 'border-border hover:border-primary/50'
+                    }`}
+                  >
+                    <div className="flex flex-col items-center gap-2">
+                      <Download className="w-8 h-8" />
+                      <span className="font-medium text-sm">PDF Report</span>
+                      <span className="text-xs text-muted-foreground text-center">
+                        Full report with overlay images
+                      </span>
+                    </div>
+                  </div>
+                  <div
+                    onClick={() => setExportFormat('excel')}
+                    className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
+                      exportFormat === 'excel'
+                        ? 'border-primary bg-primary/5'
+                        : 'border-border hover:border-primary/50'
+                    }`}
+                  >
+                    <div className="flex flex-col items-center gap-2">
+                      <Download className="w-8 h-8" />
+                      <span className="font-medium text-sm">CSV/Excel</span>
+                      <span className="text-xs text-muted-foreground text-center">
+                        Spreadsheet data only
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg bg-muted/30 p-4 space-y-2">
+                <p className="text-sm font-medium">Export Summary</p>
+                <div className="space-y-1 text-sm text-muted-foreground">
+                  <p>• Total changes: {filteredChanges.length}</p>
+                  <p>• Added: {filteredChanges.filter(c => c.type === 'new').length}</p>
+                  <p>• Removed: {filteredChanges.filter(c => c.type === 'deleted').length}</p>
+                  {hasActiveFilters && (
+                    <p className="text-xs text-primary mt-2">* Filtered results only</p>
+                  )}
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setShowExportDialog(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleExport}
+                disabled={isExporting || filteredChanges.length === 0}
+              >
+                {isExporting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Exporting...
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-4 h-4 mr-2" /> Export
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Filter Dialog */}
+        <Dialog open={showFilters} onOpenChange={setShowFilters}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Filter Changes</DialogTitle>
+              <DialogDescription>
+                Filter changes by status, trade, discipline, or cost range.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-6 py-4">
+              {/* Status Filter */}
+              <div className="space-y-3">
+                <Label className="text-sm font-semibold">Status</Label>
+                <div className="space-y-2">
+                  {['open', 'in_review', 'pricing', 'closed'].map((status) => (
+                    <div key={status} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={`status-${status}`}
+                        checked={filters.status.includes(status)}
+                        onCheckedChange={(checked) => {
+                          setFilters(prev => ({
+                            ...prev,
+                            status: checked
+                              ? [...prev.status, status]
+                              : prev.status.filter(s => s !== status)
+                          }));
+                        }}
+                      />
+                      <label
+                        htmlFor={`status-${status}`}
+                        className="text-sm font-normal cursor-pointer"
+                      >
+                        {status === 'in_review' ? 'In Review' : status.charAt(0).toUpperCase() + status.slice(1)}
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Trade Filter */}
+              {filterOptions.trades.length > 0 && (
+                <div className="space-y-3">
+                  <Label className="text-sm font-semibold">Trade</Label>
+                  <ScrollArea className="h-32 rounded-md border p-2">
+                    <div className="space-y-2">
+                      {filterOptions.trades.map((trade) => (
+                        <div key={trade} className="flex items-center space-x-2">
+                          <Checkbox
+                            id={`trade-${trade}`}
+                            checked={filters.trade.includes(trade)}
+                            onCheckedChange={(checked) => {
+                              setFilters(prev => ({
+                                ...prev,
+                                trade: checked
+                                  ? [...prev.trade, trade]
+                                  : prev.trade.filter(t => t !== trade)
+                              }));
+                            }}
+                          />
+                          <label
+                            htmlFor={`trade-${trade}`}
+                            className="text-sm font-normal cursor-pointer"
+                          >
+                            {trade}
+                          </label>
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
+                </div>
+              )}
+
+              {/* Discipline Filter */}
+              {filterOptions.disciplines.length > 0 && (
+                <div className="space-y-3">
+                  <Label className="text-sm font-semibold">Discipline</Label>
+                  <ScrollArea className="h-32 rounded-md border p-2">
+                    <div className="space-y-2">
+                      {filterOptions.disciplines.map((discipline) => (
+                        <div key={discipline} className="flex items-center space-x-2">
+                          <Checkbox
+                            id={`discipline-${discipline}`}
+                            checked={filters.discipline.includes(discipline)}
+                            onCheckedChange={(checked) => {
+                              setFilters(prev => ({
+                                ...prev,
+                                discipline: checked
+                                  ? [...prev.discipline, discipline]
+                                  : prev.discipline.filter(d => d !== discipline)
+                              }));
+                            }}
+                          />
+                          <label
+                            htmlFor={`discipline-${discipline}`}
+                            className="text-sm font-normal cursor-pointer"
+                          >
+                            {discipline}
+                          </label>
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
+                </div>
+              )}
+
+              {/* Cost Range Filter */}
+              <div className="space-y-3">
+                <Label className="text-sm font-semibold">Cost Range</Label>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label className="text-xs text-muted-foreground">Min ($)</Label>
+                    <Input
+                      type="number"
+                      placeholder="0"
+                      value={filters.costMin ?? ''}
+                      onChange={(e) => {
+                        const value = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                        setFilters(prev => ({ ...prev, costMin: value }));
+                      }}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-xs text-muted-foreground">Max ($)</Label>
+                    <Input
+                      type="number"
+                      placeholder="∞"
+                      value={filters.costMax ?? ''}
+                      onChange={(e) => {
+                        const value = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                        setFilters(prev => ({ ...prev, costMax: value }));
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <DialogFooter className="flex items-center justify-between">
+              <Button variant="ghost" onClick={clearFilters} className="mr-auto">
+                Clear All
+              </Button>
+              <Button onClick={() => setShowFilters(false)}>
+                Apply Filters
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         {/* Add Change Dialog */}
         <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
           <DialogContent>
@@ -1169,47 +2138,115 @@ export default function OverlayViewer() {
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Sheet ID</Label>
-                  <Input defaultValue="A-101" disabled />
-                </div>
-                <div className="space-y-2">
-                  <Label>Coordinates</Label>
-                  <Input defaultValue="G4-H5" disabled />
-                </div>
+              <div className="space-y-2">
+                <Label>Change Type</Label>
+                <Select
+                  value={newChange.type}
+                  onValueChange={(value: 'added' | 'removed' | 'modified') =>
+                    setNewChange(prev => ({ ...prev, type: value }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="added">Added</SelectItem>
+                    <SelectItem value="removed">Removed</SelectItem>
+                    <SelectItem value="modified">Modified</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Title*</Label>
+                <Input
+                  value={newChange.title}
+                  onChange={(e) => setNewChange(prev => ({ ...prev, title: e.target.value }))}
+                  placeholder="e.g., Wall partition moved"
+                />
               </div>
               <div className="space-y-2">
                 <Label>Description</Label>
-                <Textarea placeholder="Describe the change..." />
+                <Textarea
+                  value={newChange.description}
+                  onChange={(e) => setNewChange(prev => ({ ...prev, description: e.target.value }))}
+                  placeholder="Describe the change in detail..."
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Trade</Label>
+                  <Input
+                    value={newChange.trade || ''}
+                    onChange={(e) => setNewChange(prev => ({ ...prev, trade: e.target.value }))}
+                    placeholder="e.g., Framing"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Discipline</Label>
+                  <Input
+                    value={newChange.discipline || ''}
+                    onChange={(e) => setNewChange(prev => ({ ...prev, discipline: e.target.value }))}
+                    placeholder="e.g., Architectural"
+                  />
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Cost Impact</Label>
-                  <Input placeholder="$0" />
+                  <Input
+                    value={newChange.estimated_cost}
+                    onChange={(e) => setNewChange(prev => ({ ...prev, estimated_cost: e.target.value }))}
+                    placeholder="$0"
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Schedule Impact</Label>
-                  <Input placeholder="0 Days" />
+                  <Input
+                    value={newChange.schedule_impact}
+                    onChange={(e) => setNewChange(prev => ({ ...prev, schedule_impact: e.target.value }))}
+                    placeholder="0 Days"
+                  />
                 </div>
               </div>
               <div className="space-y-2">
                 <Label>Status</Label>
-                <Select defaultValue="open">
+                <Select
+                  value={newChange.status}
+                  onValueChange={(value) => setNewChange(prev => ({ ...prev, status: value }))}
+                >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="open">Open</SelectItem>
-                    <SelectItem value="in-review">In Review</SelectItem>
+                    <SelectItem value="in_review">In Review</SelectItem>
                     <SelectItem value="pricing">Pricing</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => { setShowAddDialog(false); setIsAddingChange(false); }}>Cancel</Button>
-              <Button onClick={() => { setShowAddDialog(false); setIsAddingChange(false); }}>Create Change</Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowAddDialog(false);
+                  setIsAddingChange(false);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleCreateChange}
+                disabled={createChangeMutation.isPending || !newChange.title.trim()}
+              >
+                {createChangeMutation.isPending ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Creating...
+                  </>
+                ) : (
+                  'Create Change'
+                )}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

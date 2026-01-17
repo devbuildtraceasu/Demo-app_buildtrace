@@ -23,8 +23,8 @@ export default function Landing() {
             <Link href="/auth">
               <Button variant="ghost" className="text-sm">Sign In</Button>
             </Link>
-            <Link href="/onboarding">
-              <Button className="font-medium">Try a Project</Button>
+            <Link href="/try-compare">
+              <Button className="font-medium">Compare Drawings</Button>
             </Link>
           </div>
         </div>
@@ -43,9 +43,9 @@ export default function Landing() {
               Get instant cost and schedule impact insights.
             </p>
             <div className="flex flex-col sm:flex-row gap-4">
-              <Link href="/onboarding">
+              <Link href="/try-compare">
                 <Button size="lg" className="h-12 px-8 text-base">
-                  Try it on one project
+                  Compare Drawings Now
                   <ArrowRight className="ml-2 w-4 h-4" />
                 </Button>
               </Link>
@@ -124,9 +124,9 @@ export default function Landing() {
           <p className="text-primary-foreground/80 text-xl mb-10 max-w-2xl mx-auto">
             Try BuildTrace on your current project. The first 10 sheets are free.
           </p>
-          <Link href="/onboarding">
+          <Link href="/try-compare">
             <Button size="lg" variant="secondary" className="h-14 px-10 text-lg font-semibold text-primary">
-              Start Your Free Project
+              Compare Drawings Free
             </Button>
           </Link>
           <p className="mt-6 text-sm text-primary-foreground/60 flex items-center justify-center gap-2">

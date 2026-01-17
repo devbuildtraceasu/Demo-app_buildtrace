@@ -643,9 +643,20 @@ def analyze_sheet(
                 ): idx
                 for idx, raw_block in enumerate(segmentation.blocks)  # type: ignore[union-attr]
             }
+            # Add timeout to prevent hanging (5 minutes per block max)
+            BLOCK_EXTRACTION_TIMEOUT = 300  # 5 minutes
             for future in as_completed(futures):
-                idx, block = future.result()
-                indexed_blocks.append((idx, block))
+                try:
+                    idx, block = future.result(timeout=BLOCK_EXTRACTION_TIMEOUT)
+                    indexed_blocks.append((idx, block))
+                except TimeoutError:
+                    logger.error(f"Block extraction timed out after {BLOCK_EXTRACTION_TIMEOUT}s")
+                    # Continue with other blocks, this one will be missing
+                    continue
+                except Exception as e:
+                    logger.error(f"Block extraction failed: {e}", exc_info=True)
+                    # Continue with other blocks
+                    continue
 
         # Sort by original index to maintain order
         indexed_blocks.sort(key=lambda x: x[0])

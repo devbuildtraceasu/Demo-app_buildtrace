@@ -9,18 +9,27 @@ import api, { Comparison, Change } from '@/lib/api';
 export function useComparison(comparisonId: string | undefined) {
   return useQuery({
     queryKey: ['comparison', comparisonId],
-    queryFn: () => api.comparisons.get(comparisonId!),
+    queryFn: () => {
+      console.log(`[useComparison] Fetching comparison: ${comparisonId}`);
+      return api.comparisons.get(comparisonId!);
+    },
     enabled: !!comparisonId,
     // TanStack Query v5: refetchInterval receives query object, not data directly
     refetchInterval: (query) => {
       const data = query.state.data as Comparison | undefined;
-      // Poll while processing
-      if (data?.status === 'processing') {
+      // Poll while processing or pending
+      if (data?.status === 'processing' || data?.status === 'pending') {
         return 2000; // Poll every 2 seconds for faster updates
       }
-      // Stop polling when complete or failed
+      // Also keep polling if completed but overlay_uri is not set yet
+      if (data?.status === 'completed' && !data?.overlay_uri) {
+        return 2000; // Keep polling until overlay is ready
+      }
+      // Stop polling when complete with overlay or failed
       return false;
     },
+    staleTime: 0, // Always consider data stale to ensure fresh fetches
+    refetchOnMount: true,
   });
 }
 
