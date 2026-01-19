@@ -3,6 +3,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
 import { Link, useLocation } from "wouter";
 import {
   Upload,
@@ -15,7 +21,12 @@ import {
   X,
   Image as ImageIcon,
   Save,
-  LogIn
+  LogIn,
+  Bot,
+  DollarSign,
+  CalendarDays,
+  Layers,
+  Sparkles
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import logo from "@assets/BuildTrace_Logo_1767832159404.jpg";
@@ -42,6 +53,27 @@ export default function TryCompare() {
   // Results state
   const [overlayUri, setOverlayUri] = useState<string | null>(null);
   const [comparisonScore, setComparisonScore] = useState<number | null>(null);
+  
+  // AI Analysis state
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [aiDetectedChanges, setAiDetectedChanges] = useState<Array<{
+    id: string;
+    type: string;
+    title: string;
+    description?: string;
+    trade?: string;
+    discipline?: string;
+    estimated_cost?: string;
+    schedule_impact?: string;
+    confidence?: number;
+  }>>([]);
+  const [analysisSummary, setAnalysisSummary] = useState<{
+    total_cost_impact?: string;
+    total_schedule_impact?: string;
+    biggest_cost_driver?: string;
+    analysis_summary?: string;
+  } | null>(null);
+  const [showChanges, setShowChanges] = useState(false);
 
   // File input refs
   const oldFileInputRef = useRef<HTMLInputElement>(null);
@@ -90,14 +122,16 @@ export default function TryCompare() {
     setUploadProgress(10);
 
     try {
-      const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+      // Ensure API_BASE includes /api prefix (same logic as api.ts)
+      const BASE_URL = import.meta.env.VITE_API_URL || '';
+      const API_BASE = BASE_URL.endsWith('/api') ? BASE_URL : BASE_URL ? `${BASE_URL}/api` : '/api';
 
       // Upload old file
       setProcessingStatus("Uploading OLD drawing...");
       const oldFormData = new FormData();
       oldFormData.append("file", oldFile);
 
-      const oldUploadResponse = await fetch(`${API_BASE}/api/uploads/public/upload`, {
+      const oldUploadResponse = await fetch(`${API_BASE}/uploads/public/upload`, {
         method: "POST",
         body: oldFormData,
       });
@@ -114,7 +148,7 @@ export default function TryCompare() {
       const newFormData = new FormData();
       newFormData.append("file", newFile);
 
-      const newUploadResponse = await fetch(`${API_BASE}/api/uploads/public/upload`, {
+      const newUploadResponse = await fetch(`${API_BASE}/uploads/public/upload`, {
         method: "POST",
         body: newFormData,
       });
@@ -128,7 +162,7 @@ export default function TryCompare() {
 
       // Create public comparison
       setProcessingStatus("Starting comparison...");
-      const compareResponse = await fetch(`${API_BASE}/api/comparisons/public/compare`, {
+      const compareResponse = await fetch(`${API_BASE}/comparisons/public/compare`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -161,13 +195,15 @@ export default function TryCompare() {
 
   // Poll for comparison completion
   const pollComparison = async (id: string) => {
-    const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+    // Ensure API_BASE includes /api prefix (same logic as api.ts)
+    const BASE_URL = import.meta.env.VITE_API_URL || '';
+    const API_BASE = BASE_URL.endsWith('/api') ? BASE_URL : BASE_URL ? `${BASE_URL}/api` : '/api';
     let attempts = 0;
-    const maxAttempts = 60; // 2 minutes max
+    const maxAttempts = 300; // 5 minutes max (for complex PDFs with grid alignment)
 
     const poll = async () => {
       try {
-        const response = await fetch(`${API_BASE}/api/comparisons/${id}`);
+        const response = await fetch(`${API_BASE}/comparisons/${id}`);
         if (!response.ok) throw new Error("Failed to fetch comparison");
 
         const data = await response.json();
@@ -185,11 +221,29 @@ export default function TryCompare() {
           throw new Error("Comparison processing failed");
         } else if (attempts < maxAttempts) {
           attempts++;
-          setUploadProgress(70 + Math.min(attempts, 28));
-          setProcessingStatus(`Processing... (${attempts}s)`);
+          setUploadProgress(70 + Math.min(attempts * 0.77, 28)); // Scale progress over 5 minutes
+          const minutes = Math.floor(attempts / 60);
+          const seconds = attempts % 60;
+          setProcessingStatus(`Processing... (${minutes}m ${seconds}s)`);
           setTimeout(poll, 1000);
         } else {
-          throw new Error("Comparison timed out");
+          // Timeout reached, but check one more time in case it just completed
+          const finalCheck = await fetch(`${API_BASE}/comparisons/${id}`);
+          if (finalCheck.ok) {
+            const finalData = await finalCheck.json();
+            if (finalData.status === "completed") {
+              setUploadProgress(100);
+              setOverlayUri(finalData.overlay_uri);
+              setComparisonScore(finalData.score);
+              setStep("results");
+              toast({
+                title: "Comparison complete!",
+                description: "Your drawings have been compared.",
+              });
+              return;
+            }
+          }
+          throw new Error("Comparison is taking longer than expected. The comparison may still be processing. Please refresh the page in a few minutes.");
         }
       } catch (error) {
         console.error("Poll error:", error);
@@ -254,7 +308,131 @@ View the overlay image for visual differences.
     setComparisonId(null);
     setOverlayUri(null);
     setComparisonScore(null);
+    setAiDetectedChanges([]);
+    setAnalysisSummary(null);
+    setShowChanges(false);
+    setIsAnalyzing(false);
     setStep("upload");
+  };
+
+  // Run AI Analysis
+  const runAIAnalysis = async () => {
+    if (!comparisonId) {
+      toast({
+        title: "No comparison available",
+        description: "Please wait for the comparison to complete first.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    setIsAnalyzing(true);
+    setShowChanges(true);
+    
+    try {
+      const BASE_URL = import.meta.env.VITE_API_URL || '';
+      const API_BASE = BASE_URL.endsWith('/api') ? BASE_URL : BASE_URL ? `${BASE_URL}/api` : '/api';
+      
+      // Call the AI change detection API (endpoint format: /analysis/detect-changes/{overlay_id}?use_ai=true)
+      const detectResponse = await fetch(`${API_BASE}/analysis/detect-changes/${comparisonId}?use_ai=true`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+      
+      if (!detectResponse.ok) {
+        throw new Error("Failed to start AI analysis");
+      }
+      
+      const detectResult = await detectResponse.json();
+      
+      toast({
+        title: "AI Analysis Started",
+        description: detectResult.message || "Analyzing changes with AI...",
+      });
+      
+      // Poll for results
+      const pollForResults = async (attempts: number = 0) => {
+        if (attempts >= 12) { // Max 60 seconds (12 * 5s)
+          setIsAnalyzing(false);
+          toast({
+            title: "Analysis Taking Longer",
+            description: "The analysis is still processing. Check back in a moment.",
+          });
+          return;
+        }
+        
+        try {
+          const summaryResponse = await fetch(`${API_BASE}/analysis/summary/${comparisonId}`);
+          if (summaryResponse.ok) {
+            const summary = await summaryResponse.json();
+            if (summary.changes && summary.changes.length > 0) {
+              setAiDetectedChanges(summary.changes);
+              setAnalysisSummary(summary.summary || null);
+              setIsAnalyzing(false);
+              
+              toast({
+                title: "Analysis Complete",
+                description: `Detected ${summary.changes.length} changes with cost/schedule estimates.`,
+              });
+            } else {
+              // Not ready yet, poll again
+              setTimeout(() => pollForResults(attempts + 1), 5000);
+            }
+          } else {
+            // Not ready yet, poll again
+            setTimeout(() => pollForResults(attempts + 1), 5000);
+          }
+        } catch {
+          // Not ready yet, poll again
+          setTimeout(() => pollForResults(attempts + 1), 5000);
+        }
+      };
+      
+      // Start polling after initial delay
+      setTimeout(() => pollForResults(0), 3000);
+      
+    } catch (error) {
+      setIsAnalyzing(false);
+      const errorMsg = error instanceof Error ? error.message : "Failed to run AI analysis";
+      toast({
+        title: "Analysis Failed",
+        description: errorMsg,
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Load existing analysis results when comparison completes
+  useEffect(() => {
+    const loadExistingAnalysis = async () => {
+      if (!comparisonId || step !== "results") return;
+      try {
+        const BASE_URL = import.meta.env.VITE_API_URL || '';
+        const API_BASE = BASE_URL.endsWith('/api') ? BASE_URL : BASE_URL ? `${BASE_URL}/api` : '/api';
+        const summaryResponse = await fetch(`${API_BASE}/analysis/summary/${comparisonId}`);
+        if (summaryResponse.ok) {
+          const summary = await summaryResponse.json();
+          if (summary.changes && summary.changes.length > 0) {
+            setAiDetectedChanges(summary.changes);
+            setAnalysisSummary(summary.summary || null);
+            setShowChanges(true);
+          }
+        }
+      } catch {
+        // No existing analysis, that's fine
+      }
+    };
+    loadExistingAnalysis();
+  }, [comparisonId, step]);
+
+  const getChangeColor = (type: string) => {
+    switch(type) {
+      case 'new': return { border: 'border-green-500', bg: 'bg-green-500/20', text: 'text-green-600' };
+      case 'deleted': return { border: 'border-red-500', bg: 'bg-red-500/20', text: 'text-red-600' };
+      default: return { border: 'border-slate-400', bg: 'bg-slate-400/20', text: 'text-slate-500' };
+    }
   };
 
   return (
@@ -458,7 +636,7 @@ View the overlay image for visual differences.
 
         {/* Results Step */}
         {step === "results" && (
-          <div className="space-y-8">
+          <div className="space-y-6">
             <div className="text-center space-y-2">
               <CheckCircle2 className="w-12 h-12 mx-auto text-green-500" />
               <h2 className="text-2xl font-bold font-display">Comparison Complete!</h2>
@@ -467,32 +645,178 @@ View the overlay image for visual differences.
               </p>
             </div>
 
-            {/* Overlay Preview */}
+            {/* Overlay with Sidebar */}
             {overlayUri && (
-              <Card className="overflow-hidden">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-lg">Overlay Result</CardTitle>
-                  <CardDescription>
-                    Red areas show additions, green areas show deletions
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="rounded-lg overflow-hidden border bg-muted">
-                    <img
-                      src={overlayUri}
-                      alt="Comparison overlay"
-                      className="w-full max-h-[500px] object-contain"
-                    />
-                  </div>
-                  {comparisonScore !== null && (
-                    <div className="mt-4 flex items-center gap-2">
-                      <Badge variant="secondary">
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="text-xs">
+                      {showChanges ? "Changes View" : "Overlay View"}
+                    </Badge>
+                    {comparisonScore !== null && (
+                      <Badge variant="secondary" className="text-xs">
                         Alignment Score: {(comparisonScore * 100).toFixed(1)}%
                       </Badge>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+                    )}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowChanges(!showChanges)}
+                    className="gap-2"
+                  >
+                    <Bot className="w-4 h-4" />
+                    {showChanges ? "Hide Analysis" : "Show AI Analysis"}
+                  </Button>
+                </div>
+                <ResizablePanelGroup direction="horizontal" className="min-h-[600px]">
+                  <ResizablePanel defaultSize={showChanges ? 75 : 100} minSize={50}>
+                    <Card className="overflow-hidden h-full flex flex-col">
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-lg">Overlay Result</CardTitle>
+                        <CardDescription>
+                          Red areas show additions, green areas show deletions
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="flex-1 flex items-center justify-center p-4">
+                        <div className="rounded-lg overflow-hidden border bg-muted w-full h-full flex items-center justify-center">
+                          <img
+                            src={overlayUri}
+                            alt="Comparison overlay"
+                            className="max-w-full max-h-full object-contain"
+                          />
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </ResizablePanel>
+
+                {showChanges && (
+                  <>
+                    <ResizableHandle />
+                    <ResizablePanel defaultSize={25} minSize={20} maxSize={40} className="bg-background border-l border-border flex flex-col">
+                      <div className="p-4 border-b border-border flex items-center justify-between">
+                        <div>
+                          <h3 className="font-semibold text-sm">Detected Changes</h3>
+                          {aiDetectedChanges.length > 0 && (
+                            <p className="text-xs text-muted-foreground mt-1">
+                              {aiDetectedChanges.length} change{aiDetectedChanges.length !== 1 ? 's' : ''} found
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      
+                      <ScrollArea className="flex-1">
+                        <div className="p-4 space-y-3">
+                          {/* AI Analysis Loading State */}
+                          {isAnalyzing && (
+                            <div className="p-6 rounded-xl border-2 border-dashed border-primary/30 bg-primary/5 animate-pulse">
+                              <div className="flex flex-col items-center text-center space-y-4">
+                                <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
+                                  <Bot className="w-6 h-6 text-primary animate-pulse" />
+                                </div>
+                                <div>
+                                  <h4 className="font-semibold text-sm mb-1">AI Analyzing Changes</h4>
+                                  <p className="text-xs text-muted-foreground">
+                                    Detecting modifications, estimating costs...
+                                  </p>
+                                </div>
+                                <Progress value={66} className="w-full h-2" />
+                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                  <span>This may take 30-60 seconds</span>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                          
+                          {/* No changes yet - prompt to run AI Analysis */}
+                          {!isAnalyzing && aiDetectedChanges.length === 0 && (
+                            <div className="p-6 rounded-xl border-2 border-dashed border-border bg-muted/20">
+                              <div className="flex flex-col items-center text-center space-y-3">
+                                <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
+                                  <Sparkles className="w-6 h-6 text-muted-foreground" />
+                                </div>
+                                <div>
+                                  <h4 className="font-semibold text-sm mb-1">No Changes Detected Yet</h4>
+                                  <p className="text-xs text-muted-foreground">
+                                    Click "AI Analysis" below to automatically detect changes with cost & schedule estimates.
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Changes List */}
+                          {aiDetectedChanges.map((change, i) => {
+                            const colors = getChangeColor(change.type);
+                            return (
+                              <div 
+                                key={change.id}
+                                className={`
+                                  p-3 rounded-lg border cursor-pointer transition-all hover:shadow-md
+                                  ${colors.border} ${colors.bg}
+                                `}
+                              >
+                                <div className="flex justify-between items-start mb-2">
+                                  <Badge className={`capitalize text-[10px] h-5 px-1.5 ${change.type === 'new' ? 'bg-green-500 hover:bg-green-600' : 'bg-red-500 hover:bg-red-600'}`}>
+                                    {change.type === 'new' ? 'Added' : 'Removed'}
+                                  </Badge>
+                                  <span className="text-xs font-mono text-muted-foreground">#{i + 1}</span>
+                                </div>
+                                <h4 className="font-medium text-sm mb-2">{change.title}</h4>
+                                {change.description && (
+                                  <p className="text-xs text-muted-foreground mb-3">{change.description}</p>
+                                )}
+                                
+                                <div className="grid grid-cols-2 gap-2 text-xs">
+                                  {change.estimated_cost && (
+                                    <div className="flex items-center gap-1.5 text-muted-foreground">
+                                      <DollarSign className="w-3 h-3" />
+                                      <span>{change.estimated_cost}</span>
+                                    </div>
+                                  )}
+                                  {change.schedule_impact && (
+                                    <div className="flex items-center gap-1.5 text-muted-foreground">
+                                      <CalendarDays className="w-3 h-3" />
+                                      <span>{change.schedule_impact}</span>
+                                    </div>
+                                  )}
+                                  {change.discipline && (
+                                    <div className="flex items-center gap-1.5 text-muted-foreground">
+                                      <Layers className="w-3 h-3" />
+                                      <span>{change.discipline}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </ScrollArea>
+
+                      <div className="p-4 border-t border-border bg-muted/10 space-y-2">
+                        <Button 
+                          variant="outline" 
+                          className="w-full gap-2"
+                          onClick={runAIAnalysis}
+                          disabled={isAnalyzing || !comparisonId}
+                        >
+                          {isAnalyzing ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin" /> Analyzing...
+                            </>
+                          ) : (
+                            <>
+                              <Bot className="w-4 h-4" /> AI Analysis
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </ResizablePanel>
+                  </>
+                )}
+              </ResizablePanelGroup>
+              </div>
             )}
 
             {/* Actions */}

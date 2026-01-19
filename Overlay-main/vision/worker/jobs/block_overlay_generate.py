@@ -126,7 +126,7 @@ def ensure_overlay(
 
 
 def _download_block_image(storage_client, uri: str) -> bytes:
-    """Download block image from storage."""
+    """Download block image from storage. Converts PDF to PNG if needed."""
     remote_path = extract_remote_path(uri)
     start = time.time()
     data = storage_client.download_to_bytes(remote_path)
@@ -136,6 +136,29 @@ def _download_block_image(storage_client, uri: str) -> bytes:
         size_bytes=len(data),
         duration_ms=int((time.time() - start) * 1000),
     )
+    
+    # Check if data is PDF (PDF files start with %PDF)
+    if data.startswith(b"%PDF"):
+        logger.info(f"[pdf.convert] Converting PDF to PNG for {remote_path}")
+        from lib.pdf_converter import convert_pdf_bytes_to_png_bytes
+        from config import config
+        
+        try:
+            indexed_pages = convert_pdf_bytes_to_png_bytes(
+                pdf_bytes=data,
+                dpi=config.pdf_conversion_dpi,
+            )
+            if indexed_pages.page_count == 0:
+                raise ValueError("PDF has no pages")
+            # Use first page for overlay generation
+            png_bytes = indexed_pages.pages[0].png_bytes
+            logger.info(f"[pdf.convert] Converted PDF to PNG: {len(png_bytes)} bytes")
+            return png_bytes
+        except Exception as e:
+            logger.error(f"[pdf.convert.failed] Failed to convert PDF: {e}")
+            raise ValueError(f"Failed to convert PDF to PNG: {e}")
+    
+    # Already PNG or other image format
     return data
 
 
@@ -286,7 +309,7 @@ def _generate_overlay_assets(
 
     try:
         # Align blocks using SIFT-first with Grid fallback
-        aligned_a, aligned_b, stats = _align_blocks(img_a, img_b, path_a, path_b, has_grid)
+        aligned_a, aligned_b, stats = _align_blocks(img_a, img_b, path_a, path_b)
 
         # Release original images - no longer needed after alignment
         del img_a, img_b
@@ -428,8 +451,17 @@ def run_block_overlay_generate_job(
     session.commit()
 
     try:
+        # Refresh overlay to ensure we have the latest state from database
+        session.refresh(overlay)
+        
         # Check if overlay already exists
         if overlay.uri and overlay.addition_uri and overlay.deletion_uri:
+            logger.info(
+                f"[overlay.skip] Overlay {overlay.id} already has URIs, skipping generation. "
+                f"URIs: overlay={overlay.uri[:50] if overlay.uri else None}..., "
+                f"addition={overlay.addition_uri[:50] if overlay.addition_uri else None}..., "
+                f"deletion={overlay.deletion_uri[:50] if overlay.deletion_uri else None}..."
+            )
             overlay_score = overlay.score
             job.status = JobStatus.COMPLETED
             job.updated_at = datetime.now(UTC)
@@ -461,6 +493,14 @@ def run_block_overlay_generate_job(
                 job_id=str(envelope.job_id),
             )
             return
+
+        # Overlay doesn't have all URIs, proceed with generation
+        logger.info(
+            f"[overlay.generate] Overlay {overlay.id} missing URIs, generating overlay. "
+            f"Has overlay_uri: {overlay.uri is not None}, "
+            f"addition_uri: {overlay.addition_uri is not None}, "
+            f"deletion_uri: {overlay.deletion_uri is not None}"
+        )
 
         # Load blocks
         block_a = session.get(Block, payload.block_a_id)

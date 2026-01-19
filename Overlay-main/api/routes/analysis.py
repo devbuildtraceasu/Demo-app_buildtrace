@@ -47,16 +47,19 @@ def generate_cuid() -> str:
     return f"c{timestamp}{random_part}"[:25]
 
 
-@router.post("/detect-changes", response_model=AnalysisJobResponse)
+@router.post("/detect-changes/{overlay_id}")
 async def detect_changes(
-    request: DetectChangesRequest,
-    session: SessionDep,
-    user: CurrentUser,
+    overlay_id: str,
+    use_ai: bool = True,
+    session: SessionDep = None,
+    user: OptionalUser = None,
 ):
     """Submit a change detection job for an overlay.
 
     Uses AI vision to identify added/removed/modified elements
     and classify them by trade with cost/schedule estimates.
+    
+    Supports both authenticated and public comparisons.
     """
     job_id = generate_cuid()
 
@@ -65,11 +68,11 @@ async def detect_changes(
         id=job_id,
         type="vision.overlay.change.detect",
         target_type="overlay",
-        target_id=request.overlay_id,
+        target_id=overlay_id,
         status="Queued",
         payload={
-            "overlay_id": request.overlay_id,
-            "include_cost_estimate": request.include_cost_estimate,
+            "overlay_id": overlay_id,
+            "include_cost_estimate": use_ai,
         },
     )
     session.add(job)
@@ -84,8 +87,8 @@ async def detect_changes(
             "type": "vision.overlay.change.detect",
             "id": job_id,
             "payload": {
-                "overlayId": request.overlay_id,
-                "includeCostEstimate": request.include_cost_estimate,
+                "overlayId": overlay_id,
+                "includeCostEstimate": use_ai,
             },
         }
 
@@ -105,7 +108,7 @@ async def detect_changes(
 
     return AnalysisJobResponse(
         job_id=job_id,
-        overlay_id=request.overlay_id,
+        overlay_id=overlay_id,
         status="queued",
         message="Change detection job submitted. Results will be available shortly.",
     )

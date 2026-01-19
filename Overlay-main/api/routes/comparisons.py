@@ -539,22 +539,69 @@ async def public_comparison(
     logger = logging.getLogger(__name__)
 
     # Create a temporary sheet for public comparisons
-    from api.routes.drawings import Block, Sheet
+    from api.routes.drawings import Block, Sheet, Drawing
+    from api.routes.projects import Project
+    from api.models import Organization
+    from sqlmodel import select
 
     # Generate IDs
+    temp_org_id = "public-org"
+    temp_project_id = "public-project"
+    temp_drawing_id = generate_cuid()
     temp_sheet_id = generate_cuid()
     block_a_id = generate_cuid()
     block_b_id = generate_cuid()
     overlay_id = generate_cuid()
 
+    # Create or get public organization (required for project)
+    # Use raw SQL to avoid schema mismatch with slug field that doesn't exist in DB
+    from sqlalchemy import text
+    try:
+        org_exists = session.exec(text("SELECT 1 FROM organizations WHERE id = :id"), {"id": temp_org_id}).first()
+        if not org_exists:
+            # Insert organization directly using raw SQL to avoid slug field issue
+            session.exec(text("""
+                INSERT INTO organizations (id, created_at, updated_at, deleted_at, name)
+                VALUES (:id, NOW(), NOW(), NULL, :name)
+            """), {"id": temp_org_id, "name": "Public"})
+            session.commit()
+    except Exception:
+        # If it already exists, that's fine
+        session.rollback()
+    session.flush()
+
+    # Create or get public project (required for drawing)
+    project = session.get(Project, temp_project_id)
+    if not project:
+        project = Project(
+            id=temp_project_id,
+            organization_id=temp_org_id,
+            name="Public Comparisons",
+            description="Temporary project for public comparisons",
+        )
+        session.add(project)
+        session.flush()
+
+    # Create temporary drawing (required for sheet foreign key)
+    temp_drawing = Drawing(
+        id=temp_drawing_id,
+        project_id=temp_project_id,
+        filename="public_comparison",
+        name="Public Comparison",
+        uri="",
+    )
+    session.add(temp_drawing)
+    session.flush()  # Flush to ensure drawing exists before creating sheet
+
     # Create temporary sheet (for organizing public blocks)
     temp_sheet = Sheet(
         id=temp_sheet_id,
-        drawing_id="public",  # Special marker for public uploads
+        drawing_id=temp_drawing_id,
         index=0,
         uri="",
     )
     session.add(temp_sheet)
+    session.flush()  # Flush to ensure sheet exists before creating blocks
 
     # Create block A (old drawing)
     block_a = Block(
