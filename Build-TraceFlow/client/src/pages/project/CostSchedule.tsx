@@ -7,6 +7,7 @@ import { useParams, useSearch } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import api from "@/lib/api";
 import { useMemo } from "react";
+import { useToast } from "@/hooks/use-toast";
 
 export default function CostSchedule() {
   const params = useParams<{ id: string }>();
@@ -14,6 +15,7 @@ export default function CostSchedule() {
   const searchString = useSearch();
   const searchParams = new URLSearchParams(searchString);
   const comparisonId = searchParams.get('comparison');
+  const { toast } = useToast();
 
   // Fetch analysis summary if comparison ID is provided
   const { data: analysisData, isLoading, error } = useQuery({
@@ -128,6 +130,75 @@ export default function CostSchedule() {
   const totalSchedule = analysisData?.summary?.total_schedule_impact || 'Not calculated';
   const analysisSummary = analysisData?.summary?.analysis_summary || 'No analysis available yet.';
 
+  // Export report function
+  const handleExportReport = () => {
+    if (!analysisData) {
+      toast({
+        title: "No data to export",
+        description: "Please wait for the analysis to complete.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Generate CSV content
+    const lines: string[] = [];
+    
+    // Header
+    lines.push("BuildTrace - Cost & Schedule Impact Report");
+    lines.push(`Generated: ${new Date().toLocaleString()}`);
+    lines.push(`Comparison ID: ${comparisonId || 'N/A'}`);
+    lines.push("");
+    
+    // Summary
+    lines.push("SUMMARY");
+    lines.push("Total Cost Impact," + (totalCost !== 'Not calculated' ? totalCost : 'N/A'));
+    lines.push("Total Schedule Impact," + (totalSchedule !== 'Not calculated' ? totalSchedule : 'N/A'));
+    lines.push("Analysis Summary," + (analysisSummary || 'N/A'));
+    lines.push("");
+    
+    // Cost Impact by Trade
+    lines.push("COST IMPACT BY TRADE");
+    lines.push("Trade,Estimated Cost");
+    costData.forEach(item => {
+      lines.push(`${item.name},$${item.cost.toLocaleString()}`);
+    });
+    lines.push("");
+    
+    // Schedule Risk Analysis
+    lines.push("SCHEDULE RISK ANALYSIS");
+    lines.push("Status,Count");
+    scheduleData.forEach(item => {
+      lines.push(`${item.name},${item.value}`);
+    });
+    lines.push("");
+    
+    // Detailed Breakdown
+    lines.push("DETAILED BREAKDOWN");
+    lines.push("Description,Trade,Estimated Cost,Schedule Impact");
+    detailedBreakdown.forEach(item => {
+      const desc = item.desc.replace(/,/g, ';'); // Replace commas in description
+      lines.push(`${desc},${item.trade},${item.cost},${item.time}`);
+    });
+    
+    // Create and download CSV
+    const csvContent = lines.join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `cost-schedule-report-${comparisonId || 'export'}-${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    
+    toast({
+      title: "Report exported",
+      description: "Cost & Schedule Impact report downloaded successfully.",
+    });
+  };
+
   return (
     <DashboardLayout>
       <div className="p-8 max-w-7xl mx-auto space-y-8">
@@ -143,7 +214,7 @@ export default function CostSchedule() {
               </p>
             )}
           </div>
-          <Button variant="outline">
+          <Button variant="outline" onClick={handleExportReport} disabled={!analysisData || isLoading}>
             <Download className="mr-2 w-4 h-4" /> Export Report
           </Button>
         </div>

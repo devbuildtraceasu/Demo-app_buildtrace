@@ -41,7 +41,8 @@ import {
 import { useParams, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import api from "@/lib/api";
-import { useDrawingStatus } from "@/hooks/use-drawings";
+import { useDrawingStatus, useSheets } from "@/hooks/use-drawings";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 export default function Drawings() {
   const params = useParams();
@@ -49,6 +50,8 @@ export default function Drawings() {
   const [viewMode, setViewMode] = useState<"grid" | "list">("list");
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerImage, setViewerImage] = useState<{ uri: string; title: string; description?: string } | null>(null);
+  const [sheetsDialogOpen, setSheetsDialogOpen] = useState(false);
+  const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
 
   // Mock data for demo purposes
   const mockDrawingSets = [
@@ -284,14 +287,30 @@ export default function Drawings() {
             {viewMode === "grid" ? (
               <div className="grid md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {drawingSets.map((set) => (
-                  <DrawingSetCard key={set.id} set={set} projectId={projectId} />
+                  <DrawingSetCard 
+                    key={set.id} 
+                    set={set} 
+                    projectId={projectId}
+                    onViewSheets={(drawingId) => {
+                      setSelectedDrawingId(drawingId);
+                      setSheetsDialogOpen(true);
+                    }}
+                  />
                 ))}
               </div>
             ) : (
               <Card>
                 <div className="divide-y divide-border">
                   {drawingSets.map((set) => (
-                    <DrawingSetRow key={set.id} set={set} projectId={projectId} />
+                    <DrawingSetRow 
+                      key={set.id} 
+                      set={set} 
+                      projectId={projectId}
+                      onViewSheets={(drawingId) => {
+                        setSelectedDrawingId(drawingId);
+                        setSheetsDialogOpen(true);
+                      }}
+                    />
                   ))}
                 </div>
               </Card>
@@ -435,13 +454,108 @@ export default function Drawings() {
             )}
           </DialogContent>
         </Dialog>
+
+        {/* Sheets and Blocks Dialog */}
+        <SheetsDialog 
+          open={sheetsDialogOpen}
+          onOpenChange={setSheetsDialogOpen}
+          drawingId={selectedDrawingId}
+        />
       </div>
     </DashboardLayout>
   );
 }
 
+// Sheets Dialog Component
+function SheetsDialog({ open, onOpenChange, drawingId }: { open: boolean; onOpenChange: (open: boolean) => void; drawingId: string | null }) {
+  const { data: sheets, isLoading: sheetsLoading } = useSheets(drawingId);
+  
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl max-h-[80vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle>Sheets and Blocks</DialogTitle>
+          <DialogDescription>
+            View all sheets and their corresponding blocks for this drawing
+          </DialogDescription>
+        </DialogHeader>
+        <ScrollArea className="flex-1 -mx-6 px-6">
+          {sheetsLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : !sheets || sheets.length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground">
+              <FileText className="w-12 h-12 mx-auto mb-4 opacity-50" />
+              <p>No sheets found for this drawing.</p>
+            </div>
+          ) : (
+            <div className="space-y-4 py-4">
+              {sheets.map((sheet) => (
+                <SheetBlockCard key={sheet.id} sheet={sheet} />
+              ))}
+            </div>
+          )}
+        </ScrollArea>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Sheet Block Card Component
+function SheetBlockCard({ sheet }: { sheet: any }) {
+  const { data: blocks, isLoading: blocksLoading } = useQuery({
+    queryKey: ['sheet', sheet.id, 'blocks'],
+    queryFn: () => api.blocks.listBySheet(sheet.id),
+    enabled: !!sheet.id,
+  });
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="text-base">{sheet.sheet_number || sheet.title || 'Unnamed Sheet'}</CardTitle>
+            {sheet.title && sheet.sheet_number && (
+              <CardDescription className="mt-1">{sheet.title}</CardDescription>
+            )}
+          </div>
+          <Badge variant="outline">{sheet.discipline || 'Unknown'}</Badge>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {blocksLoading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Loading blocks...
+          </div>
+        ) : !blocks || blocks.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No blocks found for this sheet.</p>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-sm font-medium mb-2">{blocks.length} {blocks.length === 1 ? 'block' : 'blocks'}:</p>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              {blocks.map((block: any) => (
+                <div 
+                  key={block.id} 
+                  className="p-2 rounded border bg-muted/30 text-sm"
+                >
+                  <div className="font-medium">{block.name || block.type || 'Unnamed Block'}</div>
+                  {block.type && (
+                    <div className="text-xs text-muted-foreground mt-1">{block.type}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // Component for drawing set card with real-time status
-function DrawingSetCard({ set, projectId }: { set: any; projectId?: string }) {
+function DrawingSetCard({ set, projectId, onViewSheets }: { set: any; projectId?: string; onViewSheets?: (drawingId: string) => void }) {
   const isMock = !set.drawing;
   const { data: status, isLoading: statusLoading } = useDrawingStatus(isMock ? undefined : set.drawing?.id);
   
@@ -516,7 +630,7 @@ function DrawingSetCard({ set, projectId }: { set: any; projectId?: string }) {
 }
 
 // Component for drawing set row in list view
-function DrawingSetRow({ set, projectId }: { set: any; projectId?: string }) {
+function DrawingSetRow({ set, projectId, onViewSheets }: { set: any; projectId?: string; onViewSheets?: (drawingId: string) => void }) {
   const isMock = !set.drawing;
   const { data: status, isLoading: statusLoading } = useDrawingStatus(isMock ? undefined : set.drawing?.id);
   
@@ -583,7 +697,16 @@ function DrawingSetRow({ set, projectId }: { set: any; projectId?: string }) {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem><Eye className="w-4 h-4 mr-2" /> View Sheets</DropdownMenuItem>
+            <DropdownMenuItem 
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!isMock && set.drawing?.id && onViewSheets) {
+                  onViewSheets(set.drawing.id);
+                }
+              }}
+            >
+              <Eye className="w-4 h-4 mr-2" /> View Sheets
+            </DropdownMenuItem>
             <DropdownMenuItem><Download className="w-4 h-4 mr-2" /> Download All</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

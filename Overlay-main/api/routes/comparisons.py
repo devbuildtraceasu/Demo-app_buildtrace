@@ -91,6 +91,58 @@ def s3_uri_to_download_url(uri: str | None, storage) -> str | None:
     return uri
 
 
+def _extract_cost_impact(summary: dict[str, Any] | None) -> str | None:
+    """Extract total_cost_impact from overlay summary.
+    
+    The cost impact can be stored in two places:
+    1. Directly in summary: summary.get("total_cost_impact")
+    2. Nested in cost_analysis: summary.get("cost_analysis", {}).get("total_cost_impact")
+    """
+    if not summary:
+        return None
+    
+    # Try direct access first (from change detection)
+    if "total_cost_impact" in summary:
+        cost = summary.get("total_cost_impact")
+        if cost:
+            return str(cost)
+    
+    # Try nested in cost_analysis (from cost analysis job)
+    cost_analysis = summary.get("cost_analysis")
+    if cost_analysis and isinstance(cost_analysis, dict):
+        cost = cost_analysis.get("total_cost_impact")
+        if cost:
+            return str(cost)
+    
+    return None
+
+
+def _extract_schedule_impact(summary: dict[str, Any] | None) -> str | None:
+    """Extract total_schedule_impact from overlay summary.
+    
+    The schedule impact can be stored in two places:
+    1. Directly in summary: summary.get("total_schedule_impact")
+    2. Nested in cost_analysis: summary.get("cost_analysis", {}).get("total_schedule_impact")
+    """
+    if not summary:
+        return None
+    
+    # Try direct access first (from change detection)
+    if "total_schedule_impact" in summary:
+        schedule = summary.get("total_schedule_impact")
+        if schedule:
+            return str(schedule)
+    
+    # Try nested in cost_analysis (from cost analysis job)
+    cost_analysis = summary.get("cost_analysis")
+    if cost_analysis and isinstance(cost_analysis, dict):
+        schedule = cost_analysis.get("total_schedule_impact")
+        if schedule:
+            return str(schedule)
+    
+    return None
+
+
 @router.get("/project/{project_id}", response_model=list[ComparisonResponse])
 async def list_comparisons(project_id: str, session: SessionDep, storage: StorageDep, user: OptionalUser = None):
     """List all comparisons for a project."""
@@ -99,6 +151,27 @@ async def list_comparisons(project_id: str, session: SessionDep, storage: Storag
     statement = select(Overlay).where(Overlay.deleted_at.is_(None))
     overlays = session.exec(statement).all()
 
+    # Load summaries for all overlays - SQLModel might not deserialize JSONB correctly
+    # Query all summaries directly from database to ensure we get the data
+    from sqlalchemy import text
+    overlay_ids = [o.id for o in overlays]
+    overlay_summaries = {}
+    if overlay_ids:
+        result = session.execute(
+            text("SELECT id, summary::jsonb FROM overlays WHERE id = ANY(:overlay_ids)"),
+            {"overlay_ids": overlay_ids}
+        )
+        for row in result:
+            summary_val = row[1]
+            # Handle string case (shouldn't happen with ::jsonb cast, but be safe)
+            if isinstance(summary_val, str):
+                import json
+                try:
+                    summary_val = json.loads(summary_val)
+                except:
+                    summary_val = None
+            overlay_summaries[row[0]] = summary_val
+    
     return [
         ComparisonResponse(
             id=o.id,
@@ -113,6 +186,8 @@ async def list_comparisons(project_id: str, session: SessionDep, storage: Storag
             deletion_uri=s3_uri_to_download_url(o.deletion_uri, storage),
             score=o.score,
             change_count=len(o.changes) if o.changes else 0,
+            total_cost_impact=_extract_cost_impact(overlay_summaries.get(o.id) or o.summary),
+            total_schedule_impact=_extract_schedule_impact(overlay_summaries.get(o.id) or o.summary),
         )
         for o in overlays
     ]
@@ -303,6 +378,30 @@ async def get_comparison(comparison_id: str, session: SessionDep, storage: Stora
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Comparison not found",
         )
+    
+    # Get summary - overlay.summary should be loaded correctly by SQLModel
+    summary = overlay.summary
+    
+    # Extract cost data directly (simplified for debugging)
+    cost_impact = None
+    schedule_impact = None
+    if summary and isinstance(summary, dict):
+        cost_impact = summary.get("total_cost_impact")
+        schedule_impact = summary.get("total_schedule_impact")
+        # Also check nested in cost_analysis
+        if not cost_impact:
+            cost_analysis = summary.get("cost_analysis")
+            if cost_analysis and isinstance(cost_analysis, dict):
+                cost_impact = cost_analysis.get("total_cost_impact")
+        if not schedule_impact:
+            cost_analysis = summary.get("cost_analysis")
+            if cost_analysis and isinstance(cost_analysis, dict):
+                schedule_impact = cost_analysis.get("total_schedule_impact")
+        # Convert to string if not None
+        if cost_impact:
+            cost_impact = str(cost_impact)
+        if schedule_impact:
+            schedule_impact = str(schedule_impact)
 
     # Check job status to determine comparison status
     status_value = "processing"
@@ -341,6 +440,8 @@ async def get_comparison(comparison_id: str, session: SessionDep, storage: Stora
         deletion_uri=s3_uri_to_download_url(overlay.deletion_uri, storage),
         score=overlay.score,
         change_count=len(overlay.changes) if overlay.changes else 0,
+        total_cost_impact=cost_impact,
+        total_schedule_impact=schedule_impact,
     )
 
 

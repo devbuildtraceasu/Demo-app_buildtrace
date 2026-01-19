@@ -350,10 +350,7 @@ export interface AnalysisSummary {
 
 export const analysis = {
   detectChanges: (overlayId: string, includeCostEstimate: boolean = true) =>
-    post<AnalysisResult>('/analysis/detect-changes', { 
-      overlay_id: overlayId, 
-      include_cost_estimate: includeCostEstimate 
-    }),
+    post<AnalysisResult>(`/analysis/detect-changes/${overlayId}?use_ai=${includeCostEstimate}`, {}),
   analyzeCost: (overlayId: string) =>
     post<AnalysisResult>('/analysis/cost', { overlay_id: overlayId }),
   getSummary: (overlayId: string) =>

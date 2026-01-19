@@ -232,22 +232,80 @@ export default function OverlayViewer() {
     analysis_summary?: string;
   } | null>(null);
 
+  // Helper function to get sheet name from comparison blocks
+  const getSheetNameFromComparison = useMemo(() => {
+    // Use target block (new drawing) as primary, fallback to source block
+    if (targetBlock?.sheetName) return targetBlock.sheetName;
+    if (sourceBlock?.sheetName) return sourceBlock.sheetName;
+    // Try to get from blocks via sheetMap
+    if (comparison?.drawing_b_id && allBlocks) {
+      const block = allBlocks.find(b => b.id === comparison.drawing_b_id);
+      if (block?.sheet_id && sheetMap[block.sheet_id]) {
+        return sheetMap[block.sheet_id].name || sheetMap[block.sheet_id].sheet_number || 'Sheet';
+      }
+    }
+    if (comparison?.drawing_a_id && allBlocks) {
+      const block = allBlocks.find(b => b.id === comparison.drawing_a_id);
+      if (block?.sheet_id && sheetMap[block.sheet_id]) {
+        return sheetMap[block.sheet_id].name || sheetMap[block.sheet_id].sheet_number || 'Sheet';
+      }
+    }
+    return null;
+  }, [targetBlock, sourceBlock, comparison, allBlocks, sheetMap]);
+
+  // Helper function to convert bounds to grid coordinates
+  // Bounds are normalized to 0-1000 scale (not 0-1)
+  const boundsToCoordinates = (bounds: { xmin: number; ymin: number; xmax: number; ymax: number } | undefined): string => {
+    if (!bounds) return 'N/A';
+    
+    // Convert normalized bounds (0-1000) to approximate grid coordinates
+    // Assuming a standard grid: A-Z for columns, 1-99 for rows
+    // First normalize to 0-1 by dividing by 1000
+    const normalizedXmin = bounds.xmin / 1000;
+    const normalizedYmin = bounds.ymin / 1000;
+    const normalizedXmax = bounds.xmax / 1000;
+    const normalizedYmax = bounds.ymax / 1000;
+    
+    // Convert to grid coordinates
+    // Column: A-Z (26 columns)
+    const startColIndex = Math.floor(normalizedXmin * 26);
+    const endColIndex = Math.floor(normalizedXmax * 26);
+    const startCol = String.fromCharCode(65 + Math.min(Math.max(startColIndex, 0), 25)); // A-Z
+    const endCol = String.fromCharCode(65 + Math.min(Math.max(endColIndex, 0), 25));
+    
+    // Row: 1-99
+    const startRow = Math.floor(normalizedYmin * 99) + 1;
+    const endRow = Math.floor(normalizedYmax * 99) + 1;
+    
+    // If it's a single cell, show just that
+    if (startCol === endCol && startRow === endRow) {
+      return `${startCol}${startRow}`;
+    }
+    
+    // Otherwise show range
+    return `${startCol}${startRow}-${endCol}${endRow}`;
+  };
+
   // Use API data merged with AI-detected changes
   const changes = useMemo(() => {
+    const defaultSheetName = getSheetNameFromComparison || 'Sheet';
+    
     // First, check for AI-detected changes (from overlay analysis)
     if (aiDetectedChanges && aiDetectedChanges.length > 0) {
       return aiDetectedChanges.map((c, index) => ({
         id: c.id || `ai-${index}`,
         type: c.type === 'added' ? 'new' : c.type === 'removed' ? 'deleted' : c.type,
         title: c.title,
-        sheet: 'A-101',
+        description: (c as any).description, // Include description if available
+        sheet: defaultSheetName,
         discipline: c.discipline || 'Architectural',
         cost: c.estimated_cost || '$0',
         schedule: c.schedule_impact || '0 Days',
         trade: c.trade || 'General',
         status: 'Open',
         assignee: 'Unassigned',
-        bounds: undefined, // AI changes may not have bounds initially
+        bounds: (c as any).bounds || undefined,
+        coordinates: boundsToCoordinates((c as any).bounds),
       }));
     }
     // Fall back to API changes from comparison endpoint
@@ -256,7 +314,8 @@ export default function OverlayViewer() {
         id: c.id,
         type: c.type === 'added' ? 'new' : c.type === 'removed' ? 'deleted' : c.type,
         title: c.title,
-        sheet: c.description?.split(' ')[0] || 'A-101',
+        description: c.description, // Include description from API
+        sheet: defaultSheetName,
         discipline: c.discipline || 'Architectural',
         cost: c.estimated_cost || '$0',
         schedule: c.schedule_impact || '0 Days',
@@ -264,11 +323,12 @@ export default function OverlayViewer() {
         status: c.status === 'open' ? 'Open' : c.status === 'in_review' ? 'In Review' : c.status,
         assignee: c.assignee || 'Unassigned',
         bounds: c.bounds, // Include bounds from API
+        coordinates: boundsToCoordinates(c.bounds),
       }));
     }
     // Return empty array when no changes detected
     return [];
-  }, [apiChanges, aiDetectedChanges]);
+  }, [apiChanges, aiDetectedChanges, getSheetNameFromComparison]);
 
   // Helper function to parse cost string to number
   const parseCost = (costStr: string): number => {
@@ -1696,7 +1756,7 @@ export default function OverlayViewer() {
                   </div>
                   <SheetTitle className="text-xl">{activeChange.title}</SheetTitle>
                   <SheetDescription>
-                    Sheet {activeChange.sheet} • {activeChange.discipline} • Coordinates E5-F5
+                    Sheet {activeChange.sheet} • {activeChange.discipline || activeChange.trade || 'General'} • Coordinates {(activeChange as any).coordinates || 'N/A'}
                   </SheetDescription>
                 </SheetHeader>
                 
@@ -1704,9 +1764,10 @@ export default function OverlayViewer() {
                   <div className="space-y-2">
                     <Label>Description</Label>
                     <Textarea
-                      value={editedChange.description || activeChange.title}
+                      value={editedChange.description || (activeChange as any).description || activeChange.title}
                       onChange={(e) => setEditedChange(prev => ({ ...prev, description: e.target.value }))}
                       className="min-h-[80px]"
+                      placeholder="Enter description of the change..."
                     />
                   </div>
                 </div>
